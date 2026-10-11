@@ -1,0 +1,420 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"image"
+	"image/color"
+	"image/png"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/egoist/mygo/ui"
+	"retty/internal/files"
+)
+
+func TestDesktopFilesBrowsePreviewAndLayouts(t *testing.T) {
+	previous := prefs
+	prefs = settings{FontSize: defaultFontSize}
+	t.Cleanup(func() { prefs = previous })
+	t.Setenv("RETTY_DIR", t.TempDir())
+	dir := t.TempDir()
+	os.Mkdir(filepath.Join(dir, "src"), 0700)
+	os.WriteFile(filepath.Join(dir, "src", "nested.go"), []byte("package nested\n"), 0600)
+	os.WriteFile(filepath.Join(dir, "README.md"), []byte("# Fixture\n文件预览\n"), 0600)
+	os.WriteFile(filepath.Join(dir, ".hidden"), nil, 0600)
+	img, _ := os.Create(filepath.Join(dir, "image.png"))
+	bitmap := image.NewRGBA(image.Rect(0, 0, 8, 8))
+	for y := 0; y < 8; y++ {
+		for x := 0; x < 8; x++ {
+			bitmap.Set(x, y, color.RGBA{R: 80, G: 160, B: 220, A: 255})
+		}
+	}
+	png.Encode(img, bitmap)
+	img.Close()
+	a, tt := newStaticTestApp(t)
+	p := a.tab().Focus
+	p.info.Dir = dir
+	p.term.Feed([]byte("Retty file browser fixture\r\n$ agent is running\r\n"))
+	root := a.tab().Root
+	t.Cleanup(func() {
+		if a.files != nil {
+			a.files.stop()
+		}
+	})
+	tt.Frame()
+	if err := tt.Click("打开文件浏览器"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "directory", func() bool { return a.files != nil && !a.files.loading && len(a.files.entries) == 3 })
+	if !readSettings().FilesOpen || a.tab().Root != root || a.paneIsViewed(p) {
+		t.Fatal("workspace did not preserve the hidden terminal")
+	}
+	content, ok := tt.Find("文件内容区")
+	if !ok || content.W != 736 || content.Y != compactTitleH || content.H != 620-compactTitleH {
+		t.Fatal("content does not occupy remaining workspace", content)
+	}
+	if !tt.HasText("文件树") || !tt.HasText("浏览") || !tt.HasText("Diff") {
+		t.Fatal(tt.Texts())
+	}
+	if err := tt.Click("src"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "nested directory", func() bool { return tt.HasText("nested.go") })
+	if a.files.dir != dir {
+		t.Fatal("expanding tree changed root")
+	}
+	if err := tt.Click("nested.go"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "nested preview", func() bool {
+		return !a.files.previewLoading && strings.Contains(string(a.files.previewData), "package nested")
+	})
+	if err := tt.Click("src"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if tt.HasText("nested.go") {
+		t.Fatal("directory did not collapse")
+	}
+
+	if err := tt.Click("文件选项"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("显示隐藏文件"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "hidden files", func() bool { return !a.files.loading && len(a.files.entries) == 4 })
+	if !readSettings().FilesHidden {
+		t.Fatal("hidden preference did not persist")
+	}
+	if err := tt.Click("文件选项"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem("打开目录…"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if !a.files.pathEditing {
+		t.Fatal("directory dialog did not open")
+	}
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyE)
+	tt.Frame()
+	if !prefs.FilesOpen {
+		t.Fatal("directory input leaked shortcut to workspace")
+	}
+	if err := tt.Click("取消"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if a.files.pathEditing {
+		t.Fatal("directory dialog did not close")
+	}
+
+	divider, ok := tt.Find("调整文件树宽度")
+	if !ok {
+		t.Fatal("missing divider")
+	}
+	x, y := divider.X+2, divider.Y+20
+	tt.Press(x, y)
+	tt.Move(x+40, y)
+	tt.Release(x+40, y)
+	tt.Frame()
+	if prefs.FilesWidth != 300 || readSettings().FilesWidth != 300 {
+		t.Fatal("divider width did not persist", prefs.FilesWidth, readSettings().FilesWidth)
+	}
+	prefs.FilesWidth = 260
+	tt.Frame()
+	if err := tt.Click("README.md"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "text preview", func() bool { return a.files.preview != "" && !a.files.previewLoading && len(a.files.previewRows) > 0 })
+	if !tt.HasText("文件预览") {
+		t.Fatal(tt.Texts())
+	}
+	card, ok := tt.Find("文件内容卡片")
+	if !ok || card.X != content.X+14 || card.W != content.W-28 {
+		t.Fatal("card margins or width incorrect", card, content)
+	}
+	if _, ok := tt.Find("文件目录路径"); ok {
+		t.Fatal("persistent path input remains")
+	}
+	if _, ok := tt.Find("复制预览内容"); ok {
+		t.Fatal("low-frequency actions remain outside menu")
+	}
+
+	chooseFileAction(t, tt, "复制预览内容")
+	if tt.Clipboard() != "# Fixture\n文件预览\n" {
+		t.Fatal(tt.Clipboard())
+	}
+	chooseFileAction(t, tt, "放大预览")
+	tt.Frame()
+	if !a.files.expanded {
+		t.Fatal("preview did not expand")
+	}
+	if a.paneIsViewed(p) {
+		t.Fatal("expanded preview marked obscured terminal as viewed")
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	if a.files.expanded {
+		t.Fatal("escape did not dismiss preview")
+	}
+	if err := tt.Click("image.png"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "image preview", func() bool { return !a.files.previewLoading && a.files.previewImage != nil })
+	if path := os.Getenv("RETTY_FILES_SNAPSHOT_DIR"); path != "" {
+		os.MkdirAll(path, 0700)
+		f, err := os.Create(filepath.Join(path, "files-image.png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		png.Encode(f, tt.Image())
+		f.Close()
+	}
+	chooseFileAction(t, tt, "放大预览")
+	tt.Frame()
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
+	prefs.DesktopLayout = "sidebar"
+	tt.Frame()
+	content, ok = tt.Find("文件内容区")
+	if !ok || content.W != 512 || content.X != 488 {
+		t.Fatal("sidebar and workspace overlap", content)
+	}
+	if err := tt.Click("收起文件浏览器"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+	if prefs.FilesOpen || p.bounds.W != 776 || a.tab().Root != root {
+		t.Fatal("collapse did not restore terminal", p.bounds)
+	}
+	tt.Key(ui.Cmd|ui.Shift, ui.KeyE)
+	tt.Frame()
+	if !prefs.FilesOpen {
+		t.Fatal("file shortcut did not reopen panel")
+	}
+}
+
+func TestDesktopFilesFollowsPaneAndRejectsOfflineRemote(t *testing.T) {
+	previous := prefs
+	prefs = settings{FontSize: defaultFontSize, FilesOpen: true}
+	t.Cleanup(func() { prefs = previous })
+	t.Setenv("RETTY_DIR", t.TempDir())
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "local-only.txt"), []byte("local"), 0600)
+	a, tt := newStaticTestApp(t)
+	p := a.tab().Focus
+	p.info.Dir = dir
+	tt.Frame()
+	first := a.files
+	// Switching while a local read is outstanding must not publish it into
+	// an offline remote pane, even if that remote path exists locally.
+	p.host = &desktopHost{}
+	a.syncFiles()
+	second := a.files
+	if second == first || second.err == "" || len(second.entries) != 0 {
+		t.Fatal("offline host fell back to local files")
+	}
+	a.loadFileDirectory(second, dir)
+	if second.err == "" || second.loading {
+		t.Fatal("offline path input started local read")
+	}
+	time.Sleep(20 * time.Millisecond)
+	a.runPosted()
+	if a.files != second || len(second.entries) != 0 {
+		t.Fatal("stale local result appeared in remote browser")
+	}
+	second.stop()
+	p.host = nil
+}
+
+func TestDownloadCancellationAndChangesLeaveDestinationIntact(t *testing.T) {
+	for _, change := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cancel", true: "changed"}[change], func(t *testing.T) {
+			dir := t.TempDir()
+			source, dest := filepath.Join(dir, "source"), filepath.Join(dir, "destination")
+			data := bytes.Repeat([]byte("a"), 2<<20)
+			os.WriteFile(source, data, 0600)
+			os.WriteFile(dest, []byte("original"), 0600)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			err := downloadFile(ctx, nil, source, dest, func(done, total int64) {
+				if change {
+					os.WriteFile(source, []byte("changed"), 0600)
+				} else {
+					cancel()
+				}
+			})
+			if err == nil || !change && !errors.Is(err, context.Canceled) {
+				t.Fatal(err)
+			}
+			got, _ := os.ReadFile(dest)
+			if string(got) != "original" {
+				t.Fatal("partial download replaced destination")
+			}
+			partial, _ := filepath.Glob(filepath.Join(dir, ".retty-download-*"))
+			if len(partial) != 0 {
+				t.Fatal("partial retained", partial)
+			}
+		})
+	}
+	dir := t.TempDir()
+	source, dest := filepath.Join(dir, "source"), filepath.Join(dir, "dest")
+	os.WriteFile(source, []byte("complete"), 0600)
+	if err := downloadFile(context.Background(), nil, source, dest, func(int64, int64) {}); err != nil {
+		t.Fatal(err)
+	}
+	got, _ := os.ReadFile(dest)
+	if string(got) != "complete" {
+		t.Fatal(string(got))
+	}
+	if text, ok := filePreviewText([]byte("中文")[:5], true); !ok || text != "中" {
+		t.Fatal(text, ok)
+	}
+}
+
+func TestDesktopFileGitPreview(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip(err)
+	}
+	previous := prefs
+	prefs = settings{FontSize: defaultFontSize, FilesOpen: true}
+	t.Cleanup(func() { prefs = previous })
+	t.Setenv("RETTY_DIR", t.TempDir())
+	dir := t.TempDir()
+	cmd := exec.Command("git", "init", "-q", dir)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatal(string(out), err)
+	}
+	name := filepath.Join(dir, "new.go")
+	os.WriteFile(name, []byte("package example\n\n// A new function\nfunc Added() { println(\"Hello, 世界\") }\n"), 0600)
+	a, tt := newStaticTestApp(t)
+	a.tab().Focus.info.Dir = dir
+	tt.Frame()
+	t.Cleanup(func() {
+		if a.files != nil {
+			a.files.stop()
+		}
+	})
+	waitFor(t, tt, "git directory", func() bool { return a.files != nil && !a.files.loading })
+	if err := tt.Click("new.go"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "preview", func() bool { return a.files.preview != "" && !a.files.previewLoading })
+	if err := tt.Click("Diff"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "git changes", func() bool { return a.files.diff && !a.files.loading })
+	if err := tt.Click("new.go"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "diff preview", func() bool { return !a.files.previewLoading && len(a.files.previewRows) > 0 })
+	if !tt.HasText("文件树") || a.files.previewLanguage != "Go" || len(a.files.previewSyntax) == 0 {
+		t.Fatal("diff tree or syntax missing", a.files.previewLanguage)
+	}
+
+	if a.files.err != "" || !strings.Contains(string(a.files.previewData), "+func Added()") {
+		t.Fatal(a.files.err, string(a.files.previewData))
+	}
+	if path := os.Getenv("RETTY_FILES_SNAPSHOT_DIR"); path != "" {
+		os.MkdirAll(path, 0700)
+		f, _ := os.Create(filepath.Join(path, "files-diff.png"))
+		png.Encode(f, tt.Image())
+		f.Close()
+	}
+	if err := tt.Click("浏览"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "normal mode", func() bool { return !a.files.diff && !a.files.loading })
+	if readSettings().FilesDiff {
+		t.Fatal("mode was not persisted")
+	}
+	if err := tt.Click("new.go"); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, tt, "normal content", func() bool {
+		return !a.files.previewLoading && strings.Contains(string(a.files.previewData), "Hello, 世界")
+	})
+	if !tt.HasText("文件树") || a.files.previewLanguage != "Go" {
+		t.Fatal("normal tree or syntax missing")
+	}
+	chooseFileAction(t, tt, "复制预览内容")
+	if tt.Clipboard() != string(a.files.previewData) {
+		t.Fatal("highlighting changed copied content")
+	}
+
+	if path := os.Getenv("RETTY_FILES_SNAPSHOT_DIR"); path != "" {
+		f, err := os.Create(filepath.Join(path, "files-code.png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		png.Encode(f, tt.Image())
+		f.Close()
+		dark := ui.NewTester(func(c *ui.Context) { c.SetTheme(ui.DarkTheme()); a.view(c) }, 1000, 620)
+		dark.Frame()
+		f, err = os.Create(filepath.Join(path, "files-code-dark.png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		png.Encode(f, dark.Image())
+		f.Close()
+	}
+
+	tt.SetSize(640, 620)
+	tt.Frame()
+	card, ok := tt.Find("文件内容卡片")
+	if !ok || card.X+card.W > 626 || card.W < 300 {
+		t.Fatal("narrow card clipped", card)
+	}
+	for _, label := range []string{"浏览", "Diff", "文件选项", "预览操作"} {
+		r, ok := tt.Find(label)
+		if !ok || r.X+r.W > 640 {
+			t.Fatal("narrow control clipped", label, r)
+		}
+	}
+	if path := os.Getenv("RETTY_FILES_SNAPSHOT_DIR"); path != "" {
+		f, err := os.Create(filepath.Join(path, "files-code-narrow.png"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		png.Encode(f, tt.Image())
+		f.Close()
+	}
+
+}
+
+func TestChangedFileTreeRetainsAncestorsAndCollapses(t *testing.T) {
+	root := t.TempDir()
+	b := &desktopFiles{dir: root, dirs: changedFileTree(root, []files.Entry{{Name: "a/b/deleted.go", Status: "D"}, {Name: "a/changed.go", Status: "M"}, {Name: "top.go", Status: "??"}})}
+	rows := b.treeEntries()
+	if len(rows) != 5 || rows[2].path != filepath.Join(root, "a/b/deleted.go") || rows[2].depth != 2 {
+		t.Fatal(rows)
+	}
+	b.dirs[filepath.Join(root, "a")].open = false
+	if rows = b.treeEntries(); len(rows) != 2 {
+		t.Fatal(rows)
+	}
+	b.filter = "deleted"
+	rows = b.treeEntries()
+	if len(rows) != 3 || !strings.HasSuffix(rows[2].path, "deleted.go") {
+		t.Fatal(rows)
+	}
+}
+
+func chooseFileAction(t *testing.T, tt *ui.Tester, label string) {
+	t.Helper()
+	if err := tt.Click("预览操作"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tt.ChooseMenuItem(label); err != nil {
+		t.Fatal(err)
+	}
+	tt.Frame()
+}

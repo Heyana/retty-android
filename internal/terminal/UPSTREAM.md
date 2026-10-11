@@ -112,3 +112,11 @@ Fork commit `f83962e` on `feat/ios-platform` incorporates upstream through
 plugin and its native manifest are unchanged from `e482207`; Retty retains
 its local terminal additions and Ghostty library pin. The merge preserves
 startup first-frame readiness, iOS input handling and foreground wake leases.
+
+Fork commit `4a0b646fc5a3` consolidates the existing iOS startup, foreground
+wake and inline-combobox capabilities on `main`, and merges upstream through
+`9a8bf7e` (including v0.4.2 and browser-native UI support). Relative to the
+previous Retty pin `bc60b9d50231`, the framework terminal adds `ClearSelection`
+and a fitted-font validation test, both already covered by Retty's vendor.
+The Ghostty manifest and terminal renderer are unchanged; Retty keeps its
+local CLI/iOS packaging and terminal additions.

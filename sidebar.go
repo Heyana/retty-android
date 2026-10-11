@@ -9,7 +9,7 @@ import (
 	"github.com/egoist/mygo/ui"
 )
 
-func (a *App) sidebarLayout(c *ui.Context, k *colors, bar ui.TitleBar, inbox int) {
+func (a *App) sidebarLayout(c *ui.Context, k *colors, bar ui.TitleBar) {
 	width, _ := c.Size()
 	sideWidth := float32(224)
 	if width < 720 {
@@ -31,12 +31,6 @@ func (a *App) sidebarLayout(c *ui.Context, k *colors, bar ui.TitleBar, inbox int
 					ui.Spacer(c)
 					a.sidebarToggle(c, k)
 				})
-				if ui.ButtonBase(c.Key("sidebar-inbox")).Label(inboxLabel(inbox)).FillWidth().Height(40).Margin(4, 8).Padding(0, 9).Gap(8).Radius(7).Children(func() {
-					ui.Icon(c, icon("bell")).Size(17, 17).TextColor(k.iconMuted)
-					ui.Text(c, inboxLabel(inbox)).FontSize(12).TextColor(k.textMuted)
-				}).Clicked() {
-					a.openInbox()
-				}
 				ui.Scroll(c.Key("sidebar-tabs")).Label("Sidebar tabs").Role(ui.RoleTabList).
 					Grow(1).MinHeight(0).FillWidth().Padding(10, 8).Gap(4).Children(func() {
 					for i, t := range slices.Clone(a.tabs) {
@@ -47,7 +41,7 @@ func (a *App) sidebarLayout(c *ui.Context, k *colors, bar ui.TitleBar, inbox int
 			a.sidebarVisibleTab = a.tab()
 		}
 		ui.Column(c.Key("sidebar-main")).Grow(1).Basis(0).MinWidth(0).FillHeight().Children(func() {
-			a.sidebarTitleBar(c, k, bar, inbox)
+			a.sidebarTitleBar(c, k, bar)
 			a.desktopContent(c, k)
 		})
 	})
@@ -65,7 +59,7 @@ func (a *App) sidebarToggle(c *ui.Context, k *colors) {
 	}
 }
 
-func (a *App) sidebarTitleBar(c *ui.Context, k *colors, bar ui.TitleBar, inbox int) {
+func (a *App) sidebarTitleBar(c *ui.Context, k *colors, bar ui.TitleBar) {
 	left := float32(8)
 	if prefs.SidebarCollapsed && bar.Left > 0 {
 		left = bar.Left + 8
@@ -74,7 +68,6 @@ func (a *App) sidebarTitleBar(c *ui.Context, k *colors, bar ui.TitleBar, inbox i
 		Background(k.track).BorderWidth(0, 0, 1, 0).BorderColor(k.headerBorder).AlignItems(ui.Center).DragWindow().Children(func() {
 		if prefs.SidebarCollapsed {
 			a.sidebarToggle(c, k)
-			a.inboxButton(c, k, inbox)
 		}
 		ui.Row(c).Grow(1).MinWidth(0).Children(func() {
 			if t := a.tab(); t != nil {
@@ -90,6 +83,7 @@ func (a *App) sidebarTitleBar(c *ui.Context, k *colors, bar ui.TitleBar, inbox i
 		if compactTitleButton(c.Key("sidebar-new-tab"), k, "plus", "New Tab", false).BorderWidth(0).Tooltip("New Tab  ⌘T").Clicked() {
 			a.newTab(a.currentDir())
 		}
+		a.filesToggle(c, k)
 		if compactTitleButton(c.Key("desktop-connections"), k, "plug-connected", "连接", a.hasDesktopConnections()).BorderWidth(0).Tooltip("连接").Clicked() {
 			a.showDesktopConnections(nil)
 		}

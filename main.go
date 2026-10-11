@@ -128,7 +128,7 @@ func main() {
 
 // open opens the window, with the tabs the server kept.
 func (a *App) open() {
-	a.loadInbox()
+	a.loadReadReceipts()
 	a.openWindow = a.open
 	client, err := rex.Connect()
 	if err != nil {
@@ -187,6 +187,9 @@ func (a *App) open() {
 	go a.poll(win, client)
 	a.debugHook()
 	win.OnClosed(func() {
+		if a.files != nil {
+			a.files.stop()
+		}
 		a.stopPhonePair()
 		a.saveNow()
 		a.saveDesktopHistory()
@@ -242,7 +245,6 @@ func (a *App) reset() {
 	a.activeRemote = nil
 	a.paletteOpen, a.renaming = false, nil
 	a.settingsOpen = false
-	a.inbox.open = false
 	a.saveDue, a.quitting, a.lastSnapshot, a.title = false, false, "", ""
 }
 

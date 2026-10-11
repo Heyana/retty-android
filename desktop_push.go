@@ -32,10 +32,10 @@ func (a *App) desktopPushActivity() push.DesktopActivity {
 	p := a.pushPresence
 	p.sequence++
 	present := desktopUserPresent(p.locked, p.sleeping, mygo.Power.IdleTime())
-	activity := push.DesktopActivity{ID: p.id, Sequence: p.sequence, RoutingVersion: 1, Present: present, Active: present, HideWaiting: prefs.HideAgentNotifications, HideCompletion: prefs.HideAgentCompletionNotifications}
+	activity := push.DesktopActivity{ID: p.id, Sequence: p.sequence, RoutingVersion: 1, Present: present, Active: present, HideWaiting: prefs.HideDesktopNotifications || prefs.HideAgentNotifications, HideCompletion: prefs.HideDesktopNotifications || prefs.HideAgentCompletionNotifications}
 	// Active also carries presence to older workers, whose foreground lease
 	// is their only way to suppress APNs. New workers use the exact pane.
-	if a.win.IsFocused() && !a.win.IsMinimized() && present {
+	if a.win.IsFocused() && !a.win.IsMinimized() && present && !prefs.FilesOpen {
 		if t := a.tab(); t != nil && t.Focus != nil && !t.Focus.closed {
 			activity.ViewedDesktop, activity.ViewedSession = a.hostHello(t.Host).Host.ID, t.Focus.SID
 		}

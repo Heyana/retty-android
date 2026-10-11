@@ -19,6 +19,7 @@ type command struct {
 }
 
 var (
+	cmdFiles       = command{Title: "文件浏览器", Accel: "CmdOrCtrl+Shift+E", Keys: "⇧⌘E", Run: func(a *App) { a.toggleFiles() }}
 	cmdSettings    = command{Title: "Settings…", Accel: "CmdOrCtrl+,", Keys: "⌘,", Run: func(a *App) { a.openSettings() }}
 	cmdNewTab      = command{Title: "New Tab", Accel: "CmdOrCtrl+T", Keys: "⌘T", Run: func(a *App) { a.newTab(a.currentDir()) }}
 	cmdSplitRight  = command{Title: "Split Right", Accel: "CmdOrCtrl+D", Keys: "⌘D", Run: func(a *App) { a.split(false) }}
@@ -31,7 +32,6 @@ var (
 	cmdPrevTab     = command{Title: "Previous Tab", Accel: "Ctrl+Shift+Tab", Keys: "⌃⇧Tab", Run: func(a *App) { a.cycleTab(-1) }}
 	cmdRenameTab   = command{Title: "Rename Tab…", Accel: "CmdOrCtrl+Shift+R", Keys: "⇧⌘R", Run: func(a *App) { a.startRename() }}
 	cmdPalette     = command{Title: "Command Palette…", Accel: "CmdOrCtrl+Shift+P", Keys: "⇧⌘P", Run: func(a *App) { a.openPalette() }, Hidden: true}
-	cmdInbox       = command{Title: "待处理…", Accel: "CmdOrCtrl+Shift+I", Keys: "⇧⌘I", Run: func(a *App) { a.openInbox() }}
 	cmdPalette2    = command{Title: "Go to Pane…", Accel: "CmdOrCtrl+P", Keys: "⌘P", Run: func(a *App) { a.openPalette() }, Hidden: true}
 	cmdFocusLeft   = command{Title: "Focus Pane Left", Accel: "CmdOrCtrl+Alt+Left", Keys: "⌥⌘←", Run: func(a *App) { a.moveFocus(-1, 0) }}
 	cmdFocusRight  = command{Title: "Focus Pane Right", Accel: "CmdOrCtrl+Alt+Right", Keys: "⌥⌘→", Run: func(a *App) { a.moveFocus(1, 0) }}
@@ -58,7 +58,7 @@ var (
 
 // paletteCommands are those the command palette lists, before the tabs.
 var paletteCommands = []*command{
-	&cmdInbox,
+	&cmdFiles,
 	&cmdSettings,
 	&cmdNewTab, &cmdSplitRight, &cmdSplitDown, &cmdZoom, &cmdEqualize, &cmdClosePane, &cmdCloseTab,
 	&cmdNextTab, &cmdPrevTab, &cmdRenameTab,
@@ -143,7 +143,7 @@ func (a *App) menu() *mygo.Menu {
 			item(&cmdClear),
 		}},
 		{Label: "View", Submenu: []*mygo.MenuItem{
-			item(&cmdInbox),
+			item(&cmdFiles),
 			item(&cmdPalette),
 			item(&cmdPalette2),
 			mygo.Separator(),
@@ -278,7 +278,6 @@ func (a *App) quitAndEnd() {
 }
 
 func (a *App) openPalette() {
-	a.inbox.open = false
 	a.settingsOpen = false
 	a.paletteOpen, a.paletteQuery = true, ""
 	a.focusReq = nil // the palette takes the focus
@@ -288,15 +287,16 @@ func (a *App) openPalette() {
 // Control-Tab is a menu accelerator so AppKit handles it before its own
 // key-view navigation. The original bracket shortcuts remain aliases.
 func (a *App) shortcuts(c *ui.Context) {
-	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyI) {
-		a.openInbox()
-		c.Invalidate()
-	}
 	if c.Shortcut(ui.Cmd, ui.KeyComma) {
 		a.openSettings()
 		c.Invalidate()
 	}
-	if a.settingsOpen || a.desktops.open || a.inbox.open {
+	if a.settingsOpen || a.desktops.open || a.files != nil && (a.files.expanded || a.files.pathEditing) {
+		return
+	}
+	if !a.paletteOpen && c.Shortcut(ui.Shift|ui.Cmd, ui.KeyE) {
+		a.toggleFiles()
+		c.Invalidate()
 		return
 	}
 	if !a.paletteOpen && prefs.DesktopLayout == "sidebar" && c.Shortcut(ui.Ctrl|ui.Cmd, ui.KeyS) {

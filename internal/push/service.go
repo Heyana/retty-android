@@ -58,6 +58,7 @@ type service struct {
 	dir                  string
 	state                database
 	provider             sender
+	phoneDisabled        bool
 	lastError            string
 	managed              *apns.Provider
 	current              map[string]rex.SessionInfo
@@ -212,6 +213,7 @@ func (s *service) register(r Registration) error {
 func (s *service) status() Status {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshPhonePreferenceLocked()
 	return Status{Configured: s.provider != nil, Devices: len(s.state.Devices), Sent: s.state.Sent, LastSent: s.state.LastSent, LastError: s.lastError, DesktopActive: s.desktopActiveLocked(time.Now()), RoutingVersion: 1}
 }
 func (s *service) removeLocked(key string) {
@@ -223,6 +225,7 @@ func (s *service) removeLocked(key string) {
 func (s *service) observe(hello rex.Hello, sessions []rex.SessionInfo, now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshPhonePreferenceLocked()
 	desktop := hello.Host.ID
 	if desktop == "" {
 		return
@@ -330,7 +333,8 @@ func stateLabel(state string) string {
 }
 func (s *service) deliver(ctx context.Context, now time.Time) {
 	s.mu.Lock()
-	if !s.initialized || s.provider == nil {
+	s.refreshPhonePreferenceLocked()
+	if !s.initialized || s.provider == nil || s.phoneDisabled {
 		s.mu.Unlock()
 		return
 	}

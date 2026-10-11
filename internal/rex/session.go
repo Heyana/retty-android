@@ -593,7 +593,7 @@ func (s *session) info() SessionInfo {
 	in.Idle = fg == in.PID && !isAgent
 	// A crashed/killed agent cannot emit SessionEnd. Do not leave its
 	// last waiting state on a shell prompt. Allow startup hooks to settle.
-	// Explicit results remain available to Inbox viewers after one-shot
+	// Explicit results remain available to session viewers after one-shot
 	// programs return to the shell; a new turn or SessionEnd clears them.
 	if in.Idle && in.Agent.Source != ProgramStatusSource && in.Agent.State != agents.Completed && in.Agent.State != agents.Failed && time.Since(in.Agent.Updated) > 2*time.Second {
 		in.Agent = AgentState{}

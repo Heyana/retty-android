@@ -1,7 +1,6 @@
 package main
 
 import (
-	"cmp"
 	"context"
 	"encoding/json"
 	"sync"
@@ -147,7 +146,6 @@ func (m *mobileApp) applyRecentDesktopMetadata(link string, hello rex.Hello, ses
 	if desktop.Link == "" {
 		return
 	}
-	m.cacheInboxSource(hello, cmp.Or(hello.Host.ID, desktop.Link), desktop.displayName(), sessions)
 	changed := false
 	for i, entry := range m.recentSessions {
 		if entry.Desktop != desktop.Link && (desktop.ID == "" || entry.Desktop != desktop.ID) {

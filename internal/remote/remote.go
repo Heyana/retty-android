@@ -74,6 +74,7 @@ type Bridge struct {
 	imageCancel  context.CancelFunc
 	uploadDir    string
 	uploadGate   chan struct{}
+	filesGate    chan struct{}
 	identityLock *os.File
 }
 

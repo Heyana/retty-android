@@ -18,20 +18,17 @@ const (
 func (a *App) view(c *ui.Context) {
 	a.services = c.Services()
 	a.runPosted()
+	a.syncFiles()
 	k := colorsOf(c)
 	a.focusedWin = a.win == nil || a.win.IsFocused()
 	a.syncRemotePaneActivity()
 	a.closeViewedPaneNotice()
 	c.Root().Background(terminalBackground(c))
-	// The inbox's items are made once a frame. Their bodies read task
-	// files only while the inbox is open, so opening it makes them anew.
-	inboxOpen := a.inbox.open
-	items := a.inboxItems()
 	ui.Column(c.Key("desktop-layout")).Fill().Children(func() {
 		if prefs.DesktopLayout == "sidebar" {
-			a.sidebarLayout(c, k, c.TitleBar(), len(items))
+			a.sidebarLayout(c, k, c.TitleBar())
 		} else {
-			a.compactTitleBar(c, k, c.TitleBar(), len(items))
+			a.compactTitleBar(c, k, c.TitleBar())
 			a.desktopContent(c, k)
 		}
 	})
@@ -42,10 +39,8 @@ func (a *App) view(c *ui.Context) {
 	a.palette(c, k)
 	a.settingsPage(c, k)
 	a.desktopConnectionDialog(c, k)
-	if a.inbox.open && !inboxOpen {
-		items = a.inboxItems()
-	}
-	a.inboxView(c, items)
+	a.expandedFilePreview(c, k)
+	a.fileDirectoryDialog(c, k)
 	if a.saveDue && time.Since(a.lastSave) > time.Second {
 		a.save()
 	}
@@ -61,10 +56,16 @@ func (a *App) view(c *ui.Context) {
 }
 
 func (a *App) desktopContent(c *ui.Context, k *colors) {
-	ui.Column(c.Key("desktop-content")).Grow(1).MinWidth(0).MinHeight(0).Children(func() {
-		if t := a.tab(); t != nil {
-			a.tabContent(c, k, t)
+	ui.Row(c.Key("desktop-content")).Grow(1).MinWidth(0).MinHeight(0).Children(func() {
+		if prefs.FilesOpen {
+			a.filesPanel(c, k)
+			return
 		}
+		ui.Column(c.Key("terminal-content")).Grow(1).Basis(0).FillHeight().MinWidth(0).MinHeight(0).Children(func() {
+			if t := a.tab(); t != nil {
+				a.tabContent(c, k, t)
+			}
+		})
 	})
 }
 

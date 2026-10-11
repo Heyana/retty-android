@@ -1,0 +1,90 @@
+package remote
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"retty/internal/files"
+	"retty/internal/rex"
+	"strings"
+	"time"
+)
+
+var ErrFileBrowseUnsupported = errors.New("请更新远端桌面端或 CLI 网关以支持文件浏览")
+
+func (b *Bridge) serveFiles(conn net.Conn, line []byte) {
+	b.mu.Lock()
+	if b.filesGate == nil {
+		b.filesGate = make(chan struct{}, 4)
+	}
+	gate := b.filesGate
+	b.mu.Unlock()
+	select {
+	case gate <- struct{}{}:
+		defer func() { <-gate }()
+	default:
+		_ = json.NewEncoder(conn).Encode(rex.Response{Error: "文件请求繁忙，请稍后重试"})
+		return
+	}
+	ctx, cancel := context.WithTimeout(b.imageContext, 15*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	conn.SetDeadline(time.Now().Add(15 * time.Second))
+	go func() { var extra [1]byte; _, _ = conn.Read(extra[:]); cancel() }()
+	var req files.Request
+	var result files.Result
+	err := json.Unmarshal(line, &req)
+	if len(line) > 16384 {
+		err = errors.New("文件请求过大")
+	}
+	if err == nil {
+		result, err = files.Do(ctx, req)
+	}
+	res := rex.Response{}
+	if err != nil {
+		res.Error = err.Error()
+	} else {
+		res.Data, _ = json.Marshal(result)
+	}
+	_ = json.NewEncoder(conn).Encode(res)
+}
+
+// BrowseFiles uses a separate authenticated stream and never attaches or
+// resizes the terminal. The old daemon does not need to know these operations.
+func BrowseFiles(ctx context.Context, client *rex.Client, req files.Request) (files.Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	conn, err := client.DialExtension(ctx)
+	if err != nil {
+		return files.Result{}, err
+	}
+	defer conn.Close()
+	stop := context.AfterFunc(ctx, func() { conn.Close() })
+	defer stop()
+	deadline, _ := ctx.Deadline()
+	conn.SetDeadline(deadline)
+	req.Op = "files-browse"
+	if err = json.NewEncoder(conn).Encode(req); err != nil {
+		return files.Result{}, err
+	}
+	var res rex.Response
+	if err = json.NewDecoder(io.LimitReader(conn, 7<<20)).Decode(&res); err != nil {
+		if ctx.Err() != nil {
+			return files.Result{}, ctx.Err()
+		}
+		return files.Result{}, fmt.Errorf("读取文件响应失败: %w", err)
+	}
+	if res.Error != "" {
+		if strings.Contains(res.Error, "unknown op") {
+			return files.Result{}, ErrFileBrowseUnsupported
+		}
+		return files.Result{}, errors.New(res.Error)
+	}
+	var result files.Result
+	err = json.Unmarshal(res.Data, &result)
+	return result, err
+}

@@ -26,7 +26,7 @@ func paintCompactFocus(p *ui.Painter, content, pane ui.Rect, color ui.Color) {
 
 // compactTitleBar uses a flat tab strip across the space beside the native
 // window controls. Menus and keyboard shortcuts remain available.
-func (a *App) compactTitleBar(c *ui.Context, k *colors, bar ui.TitleBar, inbox int) {
+func (a *App) compactTitleBar(c *ui.Context, k *colors, bar ui.TitleBar) {
 	left := float32(0)
 	if bar.Left > 0 {
 		left = bar.Left + 8
@@ -34,11 +34,11 @@ func (a *App) compactTitleBar(c *ui.Context, k *colors, bar ui.TitleBar, inbox i
 	ui.Row(c).Height(compactTitleH).Padding(0, bar.Right, 0, left).Gap(0).
 		Background(k.track).AlignItems(ui.Center).DragWindow().Children(func() {
 		a.tabStrip(c, k)
-		a.inboxButton(c, k, inbox)
 		b := compactTitleButton(c.Key("compact-new-tab"), k, "plus", "New Tab", false).Tooltip("New Tab  ⌘T")
 		if b.Clicked() {
 			a.newTab(a.currentDir())
 		}
+		a.filesToggle(c, k)
 		if compactTitleButton(c.Key("desktop-connections"), k, "plug-connected", "连接", a.hasDesktopConnections()).Tooltip("连接").Clicked() {
 			a.showDesktopConnections(nil)
 		}

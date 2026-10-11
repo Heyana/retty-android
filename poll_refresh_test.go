@@ -50,7 +50,7 @@ func TestIdlePollFramesAndLifecycleMaintenance(t *testing.T) {
 
 func TestPollSnapshotComparesDecodedProgressAndReceipts(t *testing.T) {
 	progress := 35
-	in := inboxFixture("fixture", agents.Running)
+	in := resultFixture("fixture", agents.Running)
 	in.Args = []string{"codex", "resume"}
 	in.Agent.Progress = &progress
 	in.ProgramStatuses = []rex.ProgramStatus{{ID: "build", State: "working", Progress: &progress}}

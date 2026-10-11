@@ -38,7 +38,7 @@ func (m *mobileApp) sessionSettingsDialog(c *ui.Context) {
 			c.Blur()
 		}
 		enabled := !m.pushDisabled
-		if mobileSettingSwitch(c, &enabled, "后台任务提醒", "bell", "任务提醒", "完成或需要确认时通知").Changed() {
+		if mobileSettingSwitch(c, &enabled, "手机通知", "bell", "手机通知", "接收此手机的后台任务提醒").Changed() {
 			m.setPushEnabled(enabled)
 		}
 		if m.hello.Version >= 6 {

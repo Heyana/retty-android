@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"github.com/egoist/mygo/ui"
 	"retty/internal/agents"
+	"retty/internal/push"
+	"retty/internal/rex"
 	"strings"
 )
 
@@ -23,7 +25,6 @@ type preferenceItem struct {
 }
 
 func (a *App) openSettings() {
-	a.inbox.open = false
 	a.finishDesktopDialog()
 	a.refreshAgentHooks()
 	a.settingsOpen = true
@@ -216,8 +217,27 @@ func (a *App) preferenceItems() []preferenceItem {
 					}
 				}
 			}},
+		{id: "desktop-notifications", title: "桌面通知", label: "Desktop notifications", detail: "在此电脑显示系统通知，包括任务完成、等待输入和终端提醒。", group: "通知", section: 2,
+			modified: prefs.HideDesktopNotifications,
+			reset:    func() { a.setDesktopNotifications(true) },
+			control: func(c *ui.Context) {
+				show := !prefs.HideDesktopNotifications
+				if settingsSwitch(c, &show, "Desktop notifications").Changed() {
+					a.setDesktopNotifications(show)
+				}
+			}},
+		{id: "phone-notifications", title: "手机通知", label: "Phone notifications", detail: "离开电脑后，将此电脑的任务提醒推送到手机。关闭后，退出桌面应用也不推送。", group: "通知", section: 2,
+			modified: prefs.HidePhoneNotifications,
+			reset:    func() { a.setPhoneNotifications(true) },
+			control: func(c *ui.Context) {
+				show := !prefs.HidePhoneNotifications
+				if settingsSwitch(c, &show, "Phone notifications").Changed() {
+					a.setPhoneNotifications(show)
+				}
+			}},
 		{id: "agent-completion-notifications", title: "完成或失败时提醒", label: "Agent completion notifications", detail: "后台 Tab 或未聚焦窗格中的 Agent 完成任务或执行失败时发送桌面通知。点击通知可返回对应窗格。", group: "通知", section: 2,
 			modified: prefs.HideAgentCompletionNotifications,
+			disabled: prefs.HideDesktopNotifications,
 			reset:    func() { a.setAgentCompletionNotifications(true) },
 			control: func(c *ui.Context) {
 				show := !prefs.HideAgentCompletionNotifications
@@ -227,6 +247,7 @@ func (a *App) preferenceItems() []preferenceItem {
 			}},
 		{id: "agent-notifications", title: "等待输入时提醒", label: "Agent waiting notifications", detail: "Agent 需要授权、回答或输入时发送桌面通知。正在查看的窗格不提醒，点击通知可定位窗格。", group: "通知", section: 2,
 			modified: prefs.HideAgentNotifications,
+			disabled: prefs.HideDesktopNotifications,
 			reset:    func() { a.setAgentNotifications(true) },
 			control: func(c *ui.Context) {
 				show := !prefs.HideAgentNotifications
@@ -294,6 +315,23 @@ func (a *App) changeAgentHooks(id string, install bool) {
 			a.refreshAgentHooks()
 		})
 	}()
+}
+
+func (a *App) setDesktopNotifications(show bool) {
+	prefs.HideDesktopNotifications = !show
+	if !show {
+		a.closeNotices(func(string) bool { return true })
+	}
+	saveSettings()
+	a.reportDesktopPushPresence()
+}
+
+func (a *App) setPhoneNotifications(show bool) {
+	prefs.HidePhoneNotifications = !show
+	saveSettings()
+	// Refresh an existing worker immediately; do not start or replace one.
+	dir := rex.Dir()
+	go func() { _, _ = push.Query(dir) }()
 }
 
 func (a *App) setAgentNotifications(show bool) {

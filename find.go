@@ -14,6 +14,10 @@ type paneFind struct {
 }
 
 func (a *App) openFind() {
+	if prefs.FilesOpen && a.files != nil {
+		a.files.filterFocus = true
+		return
+	}
 	t := a.tab()
 	if t == nil || t.Focus == nil || t.Focus.term == nil {
 		return

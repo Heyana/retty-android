@@ -114,6 +114,9 @@ func (a *App) agentIndicator(c *ui.Context, k *colors, p *Pane, s rex.AgentState
 }
 
 func (a *App) paneIsViewed(p *Pane) bool {
+	if prefs.FilesOpen {
+		return false
+	}
 	if p == nil || p.closed {
 		return false
 	}
@@ -132,8 +135,8 @@ func (a *App) paneIsViewed(p *Pane) bool {
 func (a *App) closeViewedPaneNotice() {
 	if t := a.tab(); t != nil && a.paneIsViewed(t.Focus) {
 		a.closeAgentNotice(t.Focus.noticeKey())
-		if !a.inbox.open && !a.settingsOpen && !a.paletteOpen && !a.desktops.open {
-			a.readInbox(t.Focus)
+		if !a.settingsOpen && !a.paletteOpen && !a.desktops.open && (a.files == nil || !a.files.expanded) {
+			a.readResult(t.Focus)
 		}
 	}
 }
@@ -232,7 +235,7 @@ func (a *App) showPaneNotice(p *Pane, kind string, opts mygo.NotificationOptions
 func (a *App) showDesktopPaneNotice(p *Pane, kind string, opts mygo.NotificationOptions) {
 	// All notification paths, including terminal OSC messages, share the
 	// current focus check. A cached polling snapshot may already be stale.
-	if p == nil || p.closed || a.quitting || a.paneIsViewed(p) {
+	if prefs.HideDesktopNotifications || p == nil || p.closed || a.quitting || a.paneIsViewed(p) {
 		return
 	}
 	// Headless views use an injected notifier, never the native AppKit API.
@@ -286,7 +289,6 @@ func (a *App) focusAgentPane(sid string) bool {
 			continue
 		}
 		a.settingsOpen, a.paletteOpen, a.renaming = false, false, nil
-		a.inbox.open = false
 		p.find.open, p.find.focus = false, false
 		if t.Zoom != nil && t.Zoom != p {
 			t.Zoom = nil

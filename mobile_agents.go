@@ -74,11 +74,10 @@ func (m *mobileApp) updateSessions(sessions []rex.SessionInfo, initial bool) {
 	m.syncPushRegistration()
 	m.agentPrevious = next
 	m.sessions = sessions
-	m.cacheInbox()
-	if m.inboxTerminalVisible() {
+	if m.resultTerminalVisible() {
 		for _, s := range sessions {
 			if s.ID == m.selected.ID {
-				m.readInbox(s)
+				m.readResult(s)
 			}
 		}
 	}

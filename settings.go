@@ -7,6 +7,7 @@ import (
 
 	"github.com/egoist/mygo"
 
+	"retty/internal/atomicfile"
 	"retty/internal/rex"
 )
 
@@ -17,9 +18,15 @@ type settings struct {
 	Appearance                       string  `json:"appearance,omitempty"`
 	DesktopLayout                    string  `json:"desktopLayout,omitempty"`
 	SidebarCollapsed                 bool    `json:"sidebarCollapsed,omitempty"`
+	FilesOpen                        bool    `json:"filesOpen,omitempty"`
+	FilesHidden                      bool    `json:"filesHidden,omitempty"`
+	FilesDiff                        bool    `json:"filesDiff,omitempty"`
+	FilesWidth                       float32 `json:"filesWidth,omitempty"`
 	FontSize                         float32 `json:"fontSize,omitempty"`
 	LinkEditor                       string  `json:"linkEditor,omitempty"`
 	CopyRawText                      bool    `json:"copyRawText,omitempty"`
+	HideDesktopNotifications         bool    `json:"hideDesktopNotifications,omitempty"`
+	HidePhoneNotifications           bool    `json:"hidePhoneNotifications,omitempty"`
 	HideAgentNotifications           bool    `json:"hideAgentNotifications,omitempty"`
 	HideAgentCompletionNotifications bool    `json:"hideAgentCompletionNotifications,omitempty"`
 }
@@ -104,8 +111,7 @@ func (a *App) setCopyRawText(raw bool) {
 
 func saveSettings() {
 	b, _ := json.MarshalIndent(prefs, "", "  ")
-	os.MkdirAll(rex.Dir(), 0o700)
-	os.WriteFile(settingsPath(), b, 0o600)
+	atomicfile.Write(settingsPath(), b)
 }
 
 func applyAppearance() {

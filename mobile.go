@@ -22,8 +22,7 @@ import (
 )
 
 type mobileApp struct {
-	inbox                              inboxState
-	inboxCache                         map[string][]inboxItem
+	readReceipts                       readReceiptState
 	win                                *mygo.Window
 	startup                            *ui.Startup
 	screenActive                       bool
@@ -142,7 +141,7 @@ func mobileMain() {
 		m.win = mygo.NewWindow(mygo.WindowOptions{Title: "Retty", Width: 390, Height: 844, BackgroundColor: "light-dark(#f5f6f8, #111315)", Content: ui.View(m.view)})
 		m.invalidate()
 		m.loadSessionPreferences()
-		m.loadInbox()
+		m.loadReadReceipts()
 		m.setupPush()
 		historyEpoch := m.historyEpoch
 		m.storage <- func() {
@@ -246,7 +245,6 @@ func (m *mobileApp) disconnect(forget bool) {
 	m.editingOpen = false
 	m.sessionSettingsOpen = false
 	m.deviceNameOpen = false
-	m.inbox.open = false
 	m.endingOpen, m.closingSession = false, ""
 	if m.cancel != nil {
 		m.cancel()
@@ -259,7 +257,6 @@ func (m *mobileApp) disconnect(forget bool) {
 	m.resumeLink, m.resumeSID = "", ""
 	m.connectionIssue, m.connectionDetailsOpen = nil, false
 	if forget {
-		m.inboxCache = nil
 		m.link, m.resumeLink, m.resumeSID = "", "", ""
 		m.historyEpoch++
 		m.history = nil
@@ -492,7 +489,7 @@ func (m *mobileApp) openSession(s rex.SessionInfo) {
 	m.term, m.stream, m.selected, m.error = term, stream, s, ""
 	m.resumeSID = ""
 	m.rememberSession(s)
-	m.readInbox(s)
+	m.readResult(s)
 	m.invalidate()
 }
 
@@ -570,7 +567,6 @@ func (m *mobileApp) contentView(c *ui.Context) {
 	m.sessionEndDialog(c)
 	m.connectionDialog(c)
 	m.connectionDiagnosticsDialog(c)
-	m.inboxView(c)
 	if page := m.navigation.Path(); page != m.navigationPage {
 		// A completed edge gesture changes history. Release resources only
 		// after the new page has built; a cancelled preview keeps them alive.
@@ -667,7 +663,7 @@ func (m *mobileApp) header(c *ui.Context, title string, back func(), terminalPag
 				m.connectionDetailsOpen = true
 			}
 		} else {
-			m.inboxButton(c)
+			ui.Box(c).Size(44, 44).Shrink(0)
 		}
 	})
 }
@@ -787,7 +783,6 @@ func (m *mobileApp) sessionsView(c *ui.Context) {
 			ui.Text(c, "会话").FontSize(17).Bold().PassThrough()
 			ui.Text(c, fmt.Sprint(len(m.sessions))).FontSize(13).TextColor(c.Theme().TextMuted).PassThrough()
 		})
-		m.inboxButton(c)
 		if ui.ButtonBase(c).Label("新建会话").Disabled(m.busy || m.reconnecting || m.connectionIssue != nil).Role(ui.RoleButton).Size(44, 44).Children(func() {
 			if m.busy && !m.reconnecting {
 				ui.Spinner(c).Size(18, 18).TextColor(c.Theme().Accent)

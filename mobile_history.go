@@ -35,9 +35,6 @@ func (m *mobileApp) clearSelectedDesktopHistory() {
 	if len(removed) == 0 {
 		return
 	}
-	for key := range removed {
-		delete(m.inboxCache, key)
-	}
 	// Close only the phone's control tunnel if its record was selected. This
 	// never ends the desktop's sessions, and other desktops keep their records.
 	if activeRemoved {

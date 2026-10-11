@@ -7,7 +7,7 @@ import (
 )
 
 func (s *service) phoneAvailableLocked() bool {
-	return s.provider != nil && len(s.state.Devices) > 0
+	return !s.phoneDisabled && s.provider != nil && len(s.state.Devices) > 0
 }
 
 func (s *service) noticeHandledLocked(id string, now time.Time) {
@@ -23,6 +23,9 @@ func (s *service) noticeHandledLocked(id string, now time.Time) {
 // One subscription receives each event. Prefer the phone that most recently
 // contacted this sender; APNs does not expose a device's real-time online state.
 func (s *service) queuePhoneLocked(n Notice, now time.Time, external bool) {
+	if s.phoneDisabled {
+		return
+	}
 	chosen := ""
 	var newest time.Time
 	for id, d := range s.state.Devices {
@@ -56,6 +59,7 @@ func (s *service) claim(n Notice, now time.Time) (Route, error) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.refreshPhonePreferenceLocked()
 	if _, seen := s.state.DesktopSeen[n.ID]; seen {
 		return RouteQuiet, nil
 	}

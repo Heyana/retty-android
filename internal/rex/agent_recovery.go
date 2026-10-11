@@ -315,7 +315,7 @@ func (s *Server) restoreAgent(req Request) (RestoreResult, error) {
 	r.Error, r.pid, r.seen = "", ss.p.cmd.Process.Pid, time.Now()
 	ss.mu.Lock()
 	// Recovery keeps the original pane/conversation IDs. Continue its event
-	// sequence so persisted push and Inbox receipts cannot hide the next turn.
+	// sequence so persisted push and read receipts cannot hide the next turn.
 	// Older recovery files have no sequence; use a fresh floor for migration.
 	if r.Revision == 0 {
 		r.Revision = uint64(time.Now().UnixMilli())

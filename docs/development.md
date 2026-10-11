@@ -4,20 +4,20 @@
 
 ## MyGo 依赖
 
-Retty 依赖 MyGo fork `github.com/daodao97/mygo` 的 `feat/ios-platform` 分支（包含 iOS 支持及已同步的通用终端能力）：`go.mod` 用 `replace` 固定到该分支上某个已推送提交的伪版本（`v0.0.0-<时间>-<提交>`），不会在构建时自动跟随分支更新。
+Retty 依赖 MyGo fork `github.com/daodao97/mygo` 的 `main` 分支（包含 iOS 支持及已同步的通用终端能力）：`go.mod` 用 `replace` 固定到该分支上某个已推送提交的伪版本（`v0.0.0-<时间>-<提交>`），不会在构建时自动跟随分支更新。
 
-- 上游更新先合并到 fork 的 `main` 并推送，再将 `main` 合并到 `feat/ios-platform` 并推送，最后更新 Retty。iOS 及其相关通用能力继续在 `feat/ios-platform` 开发。不要让 `go.mod` 指向未推送的提交或本地路径（`replace ... => ../mygo`）。
+- 上游更新合并到 fork 的 `main`，保留已合入的 iOS 及通用终端能力；验证并推送后再更新 Retty 的固定依赖。MyGo 改动统一在 `main` 开发。不要让 `go.mod` 指向未推送的提交或本地路径（`replace ... => ../mygo`）。
 - 更新依赖：
 
   ```sh
-  GOWORK=off go mod edit -replace github.com/egoist/mygo=github.com/daodao97/mygo@feat/ios-platform
+  GOWORK=off go mod edit -replace github.com/egoist/mygo=github.com/daodao97/mygo@main
   GOWORK=off go mod tidy
   ./scripts/check-mygo.sh
   ```
 
-- `go.work` 指向 `../mygo`，只用于同时修改 MyGo 和 Retty。该目录必须停在 `feat/ios-platform`，且与 `go.mod` 固定的提交一致；否则不加 `GOWORK=off` 的命令会悄悄使用另一份 MyGo 代码。`../mygo` 里的未提交或未推送改动不会进入 `GOWORK=off` 构建、GitHub Actions 和正式打包。
-- 改完 MyGo 后的顺序：在 `../mygo` 提交并推送 `feat/ios-platform` → 更新 Retty 伪版本 → `GOWORK=off` 跑完整检查。
-- `./scripts/check-mygo.sh` 只读检查以上约定（固定提交在 fork `feat/ios-platform` 上、`go.work` 检出在该分支且与固定提交一致），提交 `go.mod` 改动前、发布前运行。
+- `go.work` 指向 `../mygo`，只用于同时修改 MyGo 和 Retty。该目录必须停在 `main`，且与 `go.mod` 固定的提交一致；否则不加 `GOWORK=off` 的命令会悄悄使用另一份 MyGo 代码。`../mygo` 里的未提交或未推送改动不会进入 `GOWORK=off` 构建、GitHub Actions 和正式打包。
+- 改完 MyGo 后的顺序：在 `../mygo` 提交并推送 `main` → 更新 Retty 伪版本 → `GOWORK=off` 跑完整检查。
+- `./scripts/check-mygo.sh` 只读检查以上约定（固定提交在 fork `main` 上、`go.work` 检出在该分支且与固定提交一致），提交 `go.mod` 改动前、发布前运行。
 - 升级 MyGo 后对照 `internal/terminal/UPSTREAM.md`，把 vendored terminal 的本地改动带到新 API 上。上游的 UI API 可能有破坏性变化（例如 #143 的 `ui.Element` 值句柄、`Context` 只在构建期间有效），先运行 `go tool mygo migrate-ui .` 预览并跑全部测试，不能只看编译通过。
 - terminal 及其 iOS 构建链（`scripts/build-ios.sh`、libghostty-vt）留在 Retty；其他通用 iOS 原生桥接（扫码、设备信息、收起键盘、网络预热等）放在 MyGo，不要在 Retty 里重新加 cgo/Objective-C。
 
@@ -67,7 +67,7 @@ env -u MYGO_ENV -u MYGO_READY_SOCKET \
   RETTY_DIR="$PWD/.mygo/dev-data" GOWORK=off go tool mygo dev
 ```
 
-开发热更新会重新启动开发窗口；服务替换只能用于这种隔离环境。需要本地 MyGo 改动时可去掉 `GOWORK=off`，先运行 `./scripts/check-mygo.sh` 确认 `../mygo` 在 `feat/ios-platform` 上（见“MyGo 依赖”）。不要用开发命令更新 `/Applications/Retty.app`。
+开发热更新会重新启动开发窗口；服务替换只能用于这种隔离环境。需要本地 MyGo 改动时可去掉 `GOWORK=off`，先运行 `./scripts/check-mygo.sh` 确认 `../mygo` 在 `main` 上（见“MyGo 依赖”）。不要用开发命令更新 `/Applications/Retty.app`。
 
 单独调试服务时另用一个数据目录，也不要与上面的开发窗口并行共用：
 
@@ -362,11 +362,21 @@ xcrun devicectl device process launch --device "$IOS_DEVICE" --terminate-existin
 
 两种模式共用 Tab 的选择、拖动排序、重命名、关闭和右键操作，也保留已有快捷键、远端电脑标识与 Agent 状态。侧边栏列表只在切换选中 Tab 或重新展开时滚动到选中项，普通滚轮浏览不会被拉回。
 
+## 桌面文件浏览器
+
+右上角文件夹按钮、View → 文件浏览器、命令面板或 `⇧⌘E` 切换文件工作台；经典 Tab 和侧边栏模式共用这一内容视图。点击后用左侧文件树和右侧文件内容占满内容区，终端暂时隐藏、保留原有尺寸与会话；返回终端恢复显示，不重建会话。默认关闭，开关、浏览 / Diff 模式、树宽度和隐藏文件选项保存在 `settings.json`；拖动中间分隔线调整树宽度，双击恢复 260px。
+
+文件工作台跟随当前窗格及其工作目录；手动浏览其他目录后可从菜单回到会话目录。文件树默认宽 260px；单层顶部栏提供「浏览 / Diff」切换，目录与文件的低频操作分别收进「…」菜单。「打开目录…」用弹层输入路径，代码内容使用留白、圆角卡片和文件标题行，增删统计显示在标题中。「浏览」模式按需加载展开的目录，不递归扫描整棵树；「Diff」模式用只读 `git status --porcelain=v1 -z` 列出全仓库变更，构建可折叠的层级树，支持已删除文件。文件树始终保留，点击文件在右侧显示内容或差异。树和文本 / Git 变更使用 MyGo 虚拟列表；预览可放大，支持行内选择复制和复制整个已加载内容。`⌘F` 聚焦文件筛选框；隐藏的终端不计为结果已查看。目录缓存最多 256 个目录 / 20000 项，刷新清理缓存。PNG/JPEG 图片预览限制为 1600 万像素，文件内容从 256KB 起按需扩大至 4MB；目录扫描最多 5000 项并明确显示截断提示。另存为分段读取，每次最多 1MB、单文件最多 1GB，检查文件版本，取消或变化时清理请求自己的临时文件，不替换已有目标。
+
+本机读取与远端读取共用 `internal/files` 的只读服务；远端 `files-browse` 请求由已认证 Tailcat 连接上的 Bridge / CLI 网关直接处理，不送入 PTY daemon，也不发送终端输入或取得尺寸控制。并发最多 4 个，请求可取消；旧桥接返回明确的升级提示，离线远端不会退回本地目录。连接码沿用已有整机访问权限，文件操作使用桥接进程的操作系统用户权限。仅新增桥接能力，无需提升会话协议或重启真实 daemon。
+
+Git 预览使用只读命令显示工作区（含已暂存修改）相对 HEAD 的单文件变更；未跟踪文件和首次提交前的文件按新增文件显示。禁用外部 diff、textconv、fsmonitor、pager 和可选索引锁，不暂存、提交或执行项目脚本。代码语法高亮使用 [Chroma v2](https://github.com/alecthomas/chroma) 按文件名识别语言，在预览 worker 中一次解析并缓存 token；渲染使用 MyGo `RichText`，主题切换只改变配色。Diff 的每个 hunk 分别重建旧、新代码进行解析，避免删除行的词法状态污染新增行。保持复制的原始内容不变；高亮范围限制为 1MB / 200000 token，取消、超限、无法识别或词法器失败时保留纯文本预览。展示参考 [egoist/godiff](https://github.com/egoist/godiff) 的 `diffview.go`、`internal/diff/diff.go`（`ff30a21259e971b51f36480aec1b6f51f9a575b9`）：虚拟行列表、双行号和增删行背景；实现独立，不依赖其主程序或更换 MyGo 版本。
+
 ## 弹层和命令面板
 
-「待处理」入口在经典模式的标题栏、侧边栏模式的列表上方、手机首页/列表/详情页右上角。桌面快捷键为 `⇧⌘I`，也可从 View 菜单或命令面板进入。授权和回答事项优先显示，点击打开对应窗格；查看不会解除等待。完成/失败事项打开后标为已读，也可用行末勾选按钮标记。当前窗格在前台且可见时自动读掉完成项，列表浏览或通知送达不算已读。
+等待授权或回答时在对应 Tab / 窗格显示状态；完成和失败通过通知提醒，点击通知直达会话，不再提供独立的「待处理」入口或列表。当前结果窗格在前台且可见时记录已读；列表浏览或通知送达不算已读，查看不会解除等待。
 
-事件身份沿用 `AgentNoticeID`。新会话服务通过 `Hello.attention` 广告已读能力，`markAttention` 仅接受当前事件的 ID，已读结果随 `list` 在桌面/手机之间同步；源服务原子保存到 `attention-seen.json`，不触碰 PTY、尺寸或输入。旧服务降级到客户端的 256 条已读记录（桌面 `inbox-seen.json`、手机 SecureStore `inbox-seen-v1`），不能跨端同步。手机复用已有首页预览和当前连接快照，其他电脑显示「点击连接查看」，重新连接后才确认当前状态。快照不持久保存，不新增常驻连接。
+已读和通知投递回执分开保存，事件身份沿用 `AgentNoticeID`。新会话服务通过 `Hello.attention` 广告已读能力，`markAttention` 仅接受当前事件的 ID，已读结果随 `list` 在桌面/手机之间同步；源服务原子保存到 `attention-seen.json`，不触碰 PTY、尺寸或输入。旧服务降级到客户端的 256 条已读记录，继续沿用桌面 `inbox-seen.json`、手机 SecureStore `inbox-seen-v1` 的存储键，保留既有回执；旧服务不能跨端同步。
 
 Codex 只从当前根线程、当前轮的 `item/completed` 最终回复生成摘录，仍等明确的完成/空闲事件确认结束；Claude Code 使用 Stop/StopFailure 的 `last_assistant_message`。摘录为首个正文句，最多 160 字符，不包括代码块，不调用模型，不保留完整回复。新一轮会清除旧摘录；没有最终回复时沿用任务说明。桌面、远端提醒与 APNs 共用 `AgentNoticeBody`。需要源服务、对应 hook/proxy 和推送 worker 支持新字段；GUI 更新不会升级已有后台进程，不为了启用摘要或已读同步重启真实任务。Agent 恢复记录同时保存事件序号，重启电脑后继续递增，避免旧已读/通知回执吞掉恢复后的下一轮结果。
 
@@ -377,6 +387,10 @@ Codex 只从当前根线程、当前轮的 `item/completed` 最终回复生成�
 手机设备重命名、会话编辑及结束确认使用 MyGo `DialogBase.Dismissed()`，统一处理 Esc、点外部和按钮关闭后的键盘收尾。取消不保存草稿；设备重命名取消后返回会话列表设置。连接指标使用 `PopoverBase.Dismissed()` 清理当前弹层标记。
 
 ## 推送配置与状态
+
+电脑设置 → Agent → 通知提供「桌面通知」和「手机通知」两个独立开关，默认均开启。「桌面通知」控制本机全部系统提醒，关闭时也撤掉当前应用持有的通知；其下完成/失败、等待输入两个细分选项保留原值，重新开启总开关后继续使用。关闭桌面通知不会自动改为手机通知，仍沿用原有在场/离开路由。「手机通知」控制此电脑发出的手机任务提醒，独立于手机会话列表设置里的本机「手机通知」开关；两边都允许才会推送。
+
+手机发送开关由新版 push worker 在观察事件、领取路由和实际发送前读取原子保存的 `settings.json`，退出 GUI、租约过期或 worker 重启后仍生效。关闭会丢弃已排队/重试的手机提醒并取消尚未完成的发送，重新开启只提醒未来事件，不清除设备配对和 APNs key；已经由 APNs 接受的请求不能撤回。旧 worker 不认识此设置，只有升级 GUI 不能保证停止它的后台推送；继续保留旧 worker，待安全的维护时机更新，不能为了开关重启正在运行任务的服务。
 
 桌面与 APNs 共用 push worker 的事件领取记录。前台当前窗格静默；系统未锁屏、未休眠且键鼠闲置不足 5 分钟时，只发桌面通知；离开电脑后优先发到最近联系过发送端的一台手机，没有可用 APNs provider 或手机订阅时才保留桌面提醒。APNs 不提供实时手机在线查询，不能以手机 Retty 的前台连接作为后台推送的必要条件。
 

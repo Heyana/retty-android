@@ -96,7 +96,9 @@ type Pane struct {
 
 // App is the state of Retty's window.
 type App struct {
-	inbox           inboxState
+	files           *desktopFiles
+	filesWidthDirty bool
+	readReceipts    readReceiptState
 	pollSnapshots   map[*desktopHost]map[string]rex.SessionInfo
 	desktops        desktopConnections
 	desktopStorage  chan func()

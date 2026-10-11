@@ -112,7 +112,7 @@ func (m *mobileApp) setPushEnabled(enabled bool) {
 	m.invalidate()
 }
 func (m *mobileApp) taskNoticeID(session rex.SessionInfo) string {
-	return inboxNoticeID(m.hello, m.desktopKey(), session)
+	return resultNoticeID(m.hello, m.desktopKey(), session)
 }
 func (m *mobileApp) rememberNotice(id string) bool {
 	if !strings.HasPrefix(id, "retty-agent-") || len(id) > 64 {

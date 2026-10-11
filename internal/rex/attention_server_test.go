@@ -93,7 +93,7 @@ func TestAttentionReceiptsAcrossViewersAndNewTurns(t *testing.T) {
 	}
 	state("working")
 	if AttentionUnread(h.Host.ID, list(b)) {
-		t.Fatal("resolved wait remains in Inbox")
+		t.Fatal("resolved wait remains unread")
 	}
 }
 
@@ -133,7 +133,7 @@ func TestAgentSummaryBelongsToCompletedTurn(t *testing.T) {
 	}
 }
 
-func TestInboxRetainsExplicitOneShotResultOnShell(t *testing.T) {
+func TestAttentionRetainsExplicitOneShotResultOnShell(t *testing.T) {
 	t.Setenv("RETTY_DIR", t.TempDir())
 	ss, err := newSession("one-shot", CreateOptions{Dir: t.TempDir(), Command: []string{"/bin/sh"}, Cols: 80, Rows: 24})
 	if err != nil {
