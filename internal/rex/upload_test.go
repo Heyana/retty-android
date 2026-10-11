@@ -55,11 +55,11 @@ func TestFileUploadPreparationPreservesTopLevelLinkNameWithoutTraversingFolderLi
 	if err := os.Symlink(target, alias); err != nil {
 		t.Skip("symlink fixture unavailable", err)
 	}
-	req, sources, err := prepareFileUpload(context.Background(), "pane", []string{alias})
+	req, sources, _, err := prepareFileUpload(context.Background(), "pane", []string{alias})
 	if err != nil || len(req.Roots) != 1 || req.Roots[0] != "001/alias.txt" || len(sources) != 1 || sources[0].info.Size() != 4 {
 		t.Fatal("top-level link changed file name or data", req, err)
 	}
-	if _, _, err := prepareFileUpload(context.Background(), "pane", []string{dir}); err == nil || !strings.Contains(err.Error(), "符号链接") {
+	if _, _, _, err := prepareFileUpload(context.Background(), "pane", []string{dir}); err == nil || !strings.Contains(err.Error(), "符号链接") {
 		t.Fatal("folder link was silently traversed", err)
 	}
 }
@@ -69,7 +69,7 @@ func TestFileUploadPreparationHonorsCancellation(t *testing.T) {
 	os.WriteFile(file, []byte("body"), 0600)
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := prepareFileUpload(ctx, "pane", []string{file}); err != context.Canceled {
+	if _, _, _, err := prepareFileUpload(ctx, "pane", []string{file}); err != context.Canceled {
 		t.Fatal("cancelled manifest preparation continued", err)
 	}
 }

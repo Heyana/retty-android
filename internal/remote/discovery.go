@@ -5,14 +5,6 @@ import (
 	"time"
 )
 
-// Discovery belongs to the tunnel, not the short-lived dialing context or a
-// terminal attachment. Network changes can make a previously relayed path direct.
-func startPathDiscovery(q *Quality) context.CancelFunc {
-	ctx, cancel := context.WithCancel(context.Background())
-	go discoverPath(ctx, q, 2*time.Second, 30*time.Second)
-	return cancel
-}
-
 func discoverPath(ctx context.Context, q *Quality, warm, steady time.Duration) {
 	for attempt := 0; ctx.Err() == nil; attempt++ {
 		probe, cancel := context.WithTimeout(ctx, 3*time.Second)

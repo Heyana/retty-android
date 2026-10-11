@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"retty/internal/atomicfile"
 	"retty/internal/rex"
 	"sync"
 )
@@ -72,26 +73,5 @@ func (s *desktopConnectionStore) write(records map[string]json.RawMessage) error
 	if err != nil {
 		return err
 	}
-	if err = os.MkdirAll(filepath.Dir(s.path), 0700); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(s.path), ".connections-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(tmp.Name())
-	if err = tmp.Chmod(0600); err == nil {
-		_, err = tmp.Write(data)
-	}
-	if err == nil {
-		err = tmp.Sync()
-	}
-	closeErr := tmp.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		return err
-	}
-	return os.Rename(tmp.Name(), s.path)
+	return atomicfile.Write(s.path, data)
 }

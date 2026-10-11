@@ -47,7 +47,7 @@ func TestTailcatIOSBackgroundRetention(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
-	bridge, err := Start(ctx, rex.SocketPath())
+	bridge, err := Start(ctx, rex.SocketPath(), Options{})
 	if err != nil {
 		t.Fatal(err)
 	}

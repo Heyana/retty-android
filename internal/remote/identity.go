@@ -11,6 +11,7 @@ import (
 
 	"github.com/tailscale/tailcat"
 	"golang.org/x/sys/unix"
+	"retty/internal/atomicfile"
 	"tailscale.com/tailcfg"
 	"tailscale.com/types/key"
 )
@@ -122,23 +123,7 @@ func saveIdentity(dir string, server *tailcat.Server) error {
 	if err != nil {
 		return errors.New("无法保存连接身份")
 	}
-	path := identityPath(dir)
-	f, err := os.CreateTemp(filepath.Dir(path), ".identity-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err = f.Write(data); err == nil {
-		err = f.Sync()
-	}
-	closed := f.Close()
-	if err != nil {
-		return err
-	}
-	if closed != nil {
-		return closed
-	}
-	return os.Rename(f.Name(), path)
+	return atomicfile.Write(identityPath(dir), data)
 }
 
 // ForgetIdentity is for explicit revocation only, after closing the bridge.

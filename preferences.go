@@ -23,6 +23,7 @@ type preferenceItem struct {
 }
 
 func (a *App) openSettings() {
+	a.inbox.open = false
 	a.finishDesktopDialog()
 	a.refreshAgentHooks()
 	a.settingsOpen = true
@@ -134,13 +135,7 @@ func (a *App) settingsPage(c *ui.Context, k *colors) {
 	})
 	a.settingsInitialFocus = false
 	if !a.settingsOpen {
-		if t := a.tab(); t != nil && t.Focus != nil {
-			if t.Focus.find.open {
-				t.Focus.find.focus = true
-			} else {
-				a.focusReq = t.Focus
-			}
-		}
+		a.focusCurrentTerminal()
 		c.Invalidate()
 	}
 }
@@ -158,6 +153,22 @@ func (a *App) preferenceItems() []preferenceItem {
 				}
 				if ui.Segmented(c, &selected, "跟随系统", "浅色", "深色").Label("Color theme").Changed() {
 					a.setAppearance(values[selected])
+				}
+			}},
+		{id: "desktop-layout", title: "会话布局", label: "Session layout", detail: "Tab 模式使用经典顶部标签；侧边栏模式将标签放在左侧，可收起以扩大终端区域。", group: "布局", section: 0,
+			modified: prefs.DesktopLayout != "", reset: func() { a.setDesktopLayout("") },
+			control: func(c *ui.Context) {
+				selected := 0
+				if prefs.DesktopLayout == "sidebar" {
+					selected = 1
+				}
+				if ui.Segmented(c, &selected, "Tab 模式", "侧边栏模式").Label("Session layout").Changed() {
+					layout := ""
+					if selected == 1 {
+						layout = "sidebar"
+					}
+					a.setDesktopLayout(layout)
+					c.Invalidate()
 				}
 			}},
 		{id: "font-size", title: "字体大小", label: "Terminal font size", detail: "调整所有终端窗格的文字大小。也可使用 ⌘+、⌘− 和 ⌘0。", group: "文字", section: 1,
@@ -225,7 +236,6 @@ func (a *App) preferenceItems() []preferenceItem {
 			}},
 	}
 	for _, id := range agents.Integrated {
-		id := id
 		name := programOf(id).Name
 		s := a.agentHooks[id]
 		status, action, verb := "尚未接入", "启用接入", "Install"
@@ -273,31 +283,23 @@ func (a *App) changeAgentHooks(id string, install bool) {
 		return
 	}
 	a.agentHookBusy, a.agentHookError = id, ""
-	win := a.win
+	update := a.desktopDispatcher()
 	go func() {
 		err := agents.SetHooks(id, install)
-		update := func() {
+		update(func() {
 			a.agentHookBusy = ""
 			if err != nil {
 				a.agentHookError = err.Error()
 			}
 			a.refreshAgentHooks()
-		}
-		a.post(update)
-		if win != nil {
-			win.Update(a.runPosted)
-		}
+		})
 	}()
 }
 
 func (a *App) setAgentNotifications(show bool) {
 	prefs.HideAgentNotifications = !show
 	if !show {
-		for sid := range a.agentNotices {
-			if a.agentNoticeKinds[sid] == agents.Waiting {
-				a.closeAgentNotice(sid)
-			}
-		}
+		a.closeNotices(func(kind string) bool { return kind == agents.Waiting })
 	}
 	saveSettings()
 }
@@ -305,13 +307,18 @@ func (a *App) setAgentNotifications(show bool) {
 func (a *App) setAgentCompletionNotifications(show bool) {
 	prefs.HideAgentCompletionNotifications = !show
 	if !show {
-		for sid := range a.agentNotices {
-			if kind := a.agentNoticeKinds[sid]; kind == agents.Completed || kind == agents.Failed {
-				a.closeAgentNotice(sid)
-			}
-		}
+		a.closeNotices(agents.Finished)
 	}
 	saveSettings()
+}
+
+// closeNotices closes the notices of the kinds the user turned off.
+func (a *App) closeNotices(off func(kind string) bool) {
+	for sid, n := range a.agentNotices {
+		if off(n.kind) {
+			a.closeAgentNotice(sid)
+		}
+	}
 }
 
 func settingsSwitch(c *ui.Context, value *bool, label string) ui.Element {

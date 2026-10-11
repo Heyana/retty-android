@@ -2,6 +2,7 @@ package main
 
 import (
 	"io"
+	"retty/internal/remote"
 	"retty/internal/rex"
 	"time"
 )
@@ -272,11 +273,11 @@ func (a *App) closeReleasedDesktopTransport(h *desktopHost) {
 			select {
 			case <-done:
 			case <-deadline.C:
-				disposeDesktopTransport(client, tunnel)
+				remote.CloseConnection(client, tunnel)
 				return
 			}
 		}
-		disposeDesktopTransport(client, tunnel)
+		remote.CloseConnection(client, tunnel)
 	}()
 }
 

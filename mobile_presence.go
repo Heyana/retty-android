@@ -1,7 +1,9 @@
 package main
 
 import (
+	"cmp"
 	"context"
+	"encoding/json"
 	"sync"
 	"time"
 
@@ -31,11 +33,19 @@ func (s desktopPresenceState) label() string {
 }
 
 type desktopPresence struct {
-	state   desktopPresenceState
-	checked time.Time
+	state    desktopPresenceState
+	checked  time.Time
+	failures int // consecutive, to back off probing a desktop that is off
 }
 
 const recentPresenceInterval = 30 * time.Second
+const maxPresenceInterval = 5 * time.Minute
+
+// Each probe of an unreachable desktop builds a whole tunnel only to time
+// out; probe it less often the longer it stays away, up to five minutes.
+func (p desktopPresence) interval() time.Duration {
+	return min(recentPresenceInterval<<min(max(p.failures-1, 0), 4), maxPresenceInterval)
+}
 
 func (m *mobileApp) stopRecentPresence() {
 	if m.presenceCancel != nil {
@@ -46,7 +56,8 @@ func (m *mobileApp) stopRecentPresence() {
 }
 
 // Probes run only while the foreground connection page is visible. Keep cached
-// results during refresh, and use at most two short-lived tunnels at a time.
+// results during refresh, and probe at most two desktops at a time. A desktop
+// that answers keeps its tunnel parked, so the next probe or a tap reuses it.
 func (m *mobileApp) refreshRecentPresence(c *ui.Context) {
 	if m.win == nil || m.background || m.client != nil || m.busy || m.scanning || len(m.history) == 0 || m.presenceCancel != nil {
 		return
@@ -58,7 +69,7 @@ func (m *mobileApp) refreshRecentPresence(c *ui.Context) {
 	var links []string
 	for _, entry := range m.history {
 		result := m.presence[entry.Link]
-		remaining := recentPresenceInterval - c.Now().Sub(result.checked)
+		remaining := result.interval() - c.Now().Sub(result.checked)
 		if result.checked.IsZero() || remaining <= 0 {
 			links = append(links, entry.Link)
 		} else {
@@ -92,11 +103,12 @@ func (m *mobileApp) refreshRecentPresence(c *ui.Context) {
 					return
 				}
 				result := desktopPresence{state: desktopOnline, checked: time.Now()}
-				if err != nil {
-					result.state = desktopUnavailable
-				}
 				mygo.RunOnMain(func() {
 					if m.presenceEpoch == epoch {
+						if err != nil {
+							result.state = desktopUnavailable
+							result.failures = m.presence[link].failures + 1
+						}
 						m.presence[link] = result
 						if err == nil {
 							m.applyRecentDesktopMetadata(link, hello, sessions)
@@ -135,6 +147,7 @@ func (m *mobileApp) applyRecentDesktopMetadata(link string, hello rex.Hello, ses
 	if desktop.Link == "" {
 		return
 	}
+	m.cacheInboxSource(hello, cmp.Or(hello.Host.ID, desktop.Link), desktop.displayName(), sessions)
 	changed := false
 	for i, entry := range m.recentSessions {
 		if entry.Desktop != desktop.Link && (desktop.ID == "" || entry.Desktop != desktop.ID) {
@@ -158,19 +171,12 @@ func (m *mobileApp) applyRecentDesktopMetadata(link string, hello rex.Hello, ses
 }
 
 func (m *mobileApp) persistDesktopHistory() {
-	if m.store == nil || m.storage == nil {
-		return
-	}
-	saved := append([]desktopRecent(nil), m.history...)
+	saved, _ := json.Marshal(m.history)
 	epoch := m.historyEpoch
-	m.storage <- func() {
-		if err := writeDesktopHistory(m.store, saved); err != nil {
-			mygo.RunOnMain(func() {
-				if m.historyEpoch == epoch {
-					m.error = "无法保存连接记录，请重试"
-					m.invalidate()
-				}
-			})
+	m.save("history", saved, func() {
+		if m.historyEpoch == epoch {
+			m.error = "无法保存连接记录，请重试"
+			m.invalidate()
 		}
-	}
+	})
 }

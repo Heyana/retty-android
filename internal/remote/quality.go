@@ -46,22 +46,26 @@ type QualitySnapshot struct {
 	Path                                                        PathSample
 }
 
+// appendSample keeps the newest qualitySampleLimit samples. Cloning the tail
+// lets the dropped prefix's backing array be collected.
+func appendSample[T any](samples []T, sample T) []T {
+	samples = append(samples, sample)
+	if len(samples) > qualitySampleLimit {
+		samples = slices.Clone(samples[len(samples)-qualitySampleLimit:])
+	}
+	return samples
+}
+
 func (q *Quality) RecordRequest(at time.Time, duration time.Duration, err error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.requests = append(q.requests, qualityRequest{at: at, duration: duration, timeout: err != nil && Failure(err) == ConnectionTimeout, failed: err != nil})
-	if len(q.requests) > qualitySampleLimit {
-		q.requests = slices.Clone(q.requests[len(q.requests)-qualitySampleLimit:])
-	}
+	q.requests = appendSample(q.requests, qualityRequest{at: at, duration: duration, timeout: err != nil && Failure(err) == ConnectionTimeout, failed: err != nil})
 }
 
 func (q *Quality) RecoveryStarted(at time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.recoveries = append(q.recoveries, qualityRecovery{at: at})
-	if len(q.recoveries) > qualitySampleLimit {
-		q.recoveries = slices.Clone(q.recoveries[len(q.recoveries)-qualitySampleLimit:])
-	}
+	q.recoveries = appendSample(q.recoveries, qualityRecovery{at: at})
 }
 
 func (q *Quality) RecoveryFinished(at time.Time) {
@@ -76,10 +80,7 @@ func (q *Quality) RecoveryFinished(at time.Time) {
 func (q *Quality) ScreenRecovered(at time.Time) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
-	q.screens = append(q.screens, at)
-	if len(q.screens) > qualitySampleLimit {
-		q.screens = slices.Clone(q.screens[len(q.screens)-qualitySampleLimit:])
-	}
+	q.screens = appendSample(q.screens, at)
 }
 
 func (q *Quality) Snapshot(now time.Time) QualitySnapshot {

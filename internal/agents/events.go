@@ -2,11 +2,12 @@ package agents
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 )
 
 // HookInput retains only lifecycle metadata shared by supported agents.
-// Prompt text, transcripts and tool arguments are deliberately not retained.
+// Full transcripts and tool arguments are deliberately not retained.
 type HookInput struct {
 	Event     string `json:"hook_event_name"`
 	SessionID string `json:"session_id"`
@@ -20,6 +21,7 @@ type HookInput struct {
 	Notification string  `json:"notification_type"`
 	Source       string  `json:"source"`
 	AgentID      string  `json:"agent_id"`
+	Summary      string  `json:"last_assistant_message,omitempty"`
 }
 
 // Integrated lists agents with verified lifecycle hook support.
@@ -59,10 +61,13 @@ const (
 	Ended     = "ended"
 )
 
+// Finished tells whether a state is a turn's final result.
+func Finished(state string) bool { return state == Completed || state == Failed }
+
 // HookStatus only recognizes actual lifecycle events, never silence or
 // arbitrary terminal output. Subagent lifecycle events cannot finish a tab.
 func HookStatus(agent string, h HookInput) (state, reason string) {
-	if (agent != "claude" && agent != "codex" && agent != "gemini" && agent != "qwen") || h.SessionID == "" || h.AgentID != "" {
+	if !slices.Contains(Integrated, agent) || h.SessionID == "" || h.AgentID != "" {
 		return "", ""
 	}
 	h = NormalizeHook(agent, h)
@@ -121,19 +126,26 @@ func ParseHook(agent string, data []byte) (HookInput, bool) {
 	if json.Unmarshal(data, &h) != nil {
 		return h, false
 	}
+	h.Summary = SummaryText(h.Summary)
+	return h, ValidHook(agent, h)
+}
+
+// ValidHook tells whether a decoded hook carries bounded, single-line
+// metadata and a recognized lifecycle event.
+func ValidHook(agent string, h HookInput) bool {
 	if len(h.CWD) > 4096 || strings.ContainsAny(h.CWD, "\x00\r\n") {
-		return h, false
+		return false
 	}
 	if h.ConfigDir != nil && (len(*h.ConfigDir) > 4096 || strings.ContainsAny(*h.ConfigDir, "\x00\r\n")) {
-		return h, false
+		return false
 	}
 	for _, value := range []string{h.Event, h.SessionID, h.TurnID, h.Tool, h.ToolID, h.Notification, h.Source, h.AgentID} {
 		if len(value) > 256 || strings.ContainsAny(value, "\x00\r\n") {
-			return h, false
+			return false
 		}
 	}
 	state, _ := HookStatus(agent, h)
-	return h, state != ""
+	return state != ""
 }
 
 func HookEvents(agent string) []string {

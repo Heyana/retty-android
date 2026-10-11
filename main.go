@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"path/filepath"
 	"runtime"
 	"time"
 
@@ -19,6 +20,7 @@ import (
 	"github.com/egoist/mygo/ui"
 
 	"retty/internal/push"
+	"retty/internal/remote"
 	"retty/internal/rex"
 )
 
@@ -126,6 +128,7 @@ func main() {
 
 // open opens the window, with the tabs the server kept.
 func (a *App) open() {
+	a.loadInbox()
 	a.openWindow = a.open
 	client, err := rex.Connect()
 	if err != nil {
@@ -188,13 +191,8 @@ func (a *App) open() {
 		a.saveNow()
 		a.saveDesktopHistory()
 		a.quitting = true
-		for _, t := range a.tabs {
-			for _, p := range t.panes() {
-				p.closed = true
-				if p.term != nil {
-					a.closePaneTerminal(p) // detaches: the session goes on
-				}
-			}
+		for _, p := range a.allPanes() {
+			a.endPane(p, false) // detaches: the session goes on
 		}
 		a.waitRemoteSizeReleases()
 		a.closeDesktopConnections()
@@ -202,6 +200,10 @@ func (a *App) open() {
 		a.win = nil
 	})
 	a.restorePhonePair()
+	// Tunnels to other desktops then keep one key each across connections.
+	if err := remote.LoadClientSecret(filepath.Join(rex.Dir(), "remote")); err != nil {
+		log.Printf("remote: client secret: %v", err)
+	}
 	a.loadDesktopHistory()
 }
 
@@ -235,10 +237,12 @@ func (a *App) saveNow() {
 // reset forgets the state of a window that closed, keeping the server's
 // connection, for the next window.
 func (a *App) reset() {
+	a.pollSnapshots = nil
 	a.tabs, a.active, a.focusReq = nil, 0, nil
 	a.activeRemote = nil
 	a.paletteOpen, a.renaming = false, nil
 	a.settingsOpen = false
+	a.inbox.open = false
 	a.saveDue, a.quitting, a.lastSnapshot, a.title = false, false, "", ""
 }
 

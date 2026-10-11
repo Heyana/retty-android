@@ -130,12 +130,10 @@ func (o *codexObserver) snapshot(thread codexThread, turn codexTurn) {
 	if thread.Status.Type == "active" && !o.active && turn.Status != "inProgress" {
 		// A new active turn may not have reached history yet. Clear the old
 		// completion badge, without attributing the old turn to this new work.
-		o.turn, o.active, o.wait, o.finished = "", true, "", ""
-		o.event("UserPromptSubmit", "")
+		o.beginTurn("")
 	}
 	if turn.ID != "" && turn.Status == "inProgress" && (!o.active || o.turn != turn.ID) {
-		o.turn, o.active, o.wait, o.finished = turn.ID, true, "", ""
-		o.event("UserPromptSubmit", "")
+		o.beginTurn(turn.ID)
 	}
 	o.waiting(thread.Status)
 	// These two records are fetched separately. An active thread paired with

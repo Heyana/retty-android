@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"retty/internal/remote"
 )
 
 // The connection drawer overlays the terminal, so opening it never resizes a PTY.
@@ -354,8 +355,12 @@ func (a *App) desktopLocalConnection(c *ui.Context) {
 func (a *App) desktopIncomingRows(c *ui.Context) {
 	var active = map[string]bool{}
 	incoming := mergeIncomingDevices(nil, a.desktops.incoming)
-	if a.phone != nil && a.phone.bridge != nil {
-		devices := mergeIncomingDevices(nil, a.phone.bridge.Devices())
+	var bridge *remote.Bridge
+	if a.phone != nil {
+		bridge = a.phone.bridge
+	}
+	if bridge != nil {
+		devices := mergeIncomingDevices(nil, bridge.Devices())
 		incoming = mergeIncomingDevices(devices, incoming)
 		for _, d := range devices {
 			active[d.ID] = true
@@ -385,20 +390,20 @@ func (a *App) desktopIncomingRows(c *ui.Context) {
 					if strings.Contains(strings.ToLower(d.OS), "ios") || strings.Contains(strings.ToLower(d.OS), "android") {
 						glyph = "smartphone"
 					}
+					connected := bridge != nil && bridge.DeviceConnected(d.ID)
+					disconnected := bridge != nil && bridge.DeviceDisconnected(d.ID)
 					iconColor := colorsOf(c).iconMuted
-					if active[d.ID] || a.phone != nil && a.phone.bridge != nil && a.phone.bridge.DeviceConnected(d.ID) {
+					if active[d.ID] || connected {
 						iconColor = colorsOf(c).busy
 					}
 					mobileListIcon(c, glyph, iconColor)
 					status, col := "离线", colorsOf(c).textFaint
 					if active[d.ID] {
 						status, col = "已连接", colorsOf(c).busy
-					} else if a.phone != nil && a.phone.bridge != nil {
-						if a.phone.bridge.DeviceDisconnected(d.ID) {
-							status = "已断开"
-						} else if a.phone.bridge.DeviceConnected(d.ID) {
-							status = "后台"
-						}
+					} else if disconnected {
+						status = "已断开"
+					} else if connected {
+						status = "后台"
 					}
 					subtitle := d.OS
 					if !active[d.ID] && !d.Connected.IsZero() {
@@ -409,16 +414,13 @@ func (a *App) desktopIncomingRows(c *ui.Context) {
 						ui.Box(c).Size(5, 5).Radius(3).Background(col)
 						ui.Text(c, status).FontSize(10).TextColor(col)
 					})
-					if a.phone != nil && a.phone.bridge != nil {
-						bridge := a.phone.bridge
-						if bridge.DeviceDisconnected(d.ID) {
-							if desktopConnectionIconAction(c, "允许设备 "+d.Name+" 重新连接", "plug-connected").Clicked() {
-								bridge.AllowDevice(d.ID)
-							}
-						} else if bridge.DeviceConnected(d.ID) {
-							if desktopConnectionIconAction(c, "断开设备 "+d.Name, "unplug").Clicked() {
-								go bridge.DisconnectDevice(d.ID)
-							}
+					if disconnected {
+						if desktopConnectionIconAction(c, "允许设备 "+d.Name+" 重新连接", "plug-connected").Clicked() {
+							bridge.AllowDevice(d.ID)
+						}
+					} else if connected {
+						if desktopConnectionIconAction(c, "断开设备 "+d.Name, "unplug").Clicked() {
+							go bridge.DisconnectDevice(d.ID)
 						}
 					}
 				})

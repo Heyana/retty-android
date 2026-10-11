@@ -23,13 +23,17 @@ func (a *App) view(c *ui.Context) {
 	a.syncRemotePaneActivity()
 	a.closeViewedPaneNotice()
 	c.Root().Background(terminalBackground(c))
-	ui.Column(c).Fill().Children(func() {
-		a.compactTitleBar(c, k, c.TitleBar())
-		ui.Column(c).Grow(1).MinHeight(0).Children(func() {
-			if t := a.tab(); t != nil {
-				a.tabContent(c, k, t)
-			}
-		})
+	// The inbox's items are made once a frame. Their bodies read task
+	// files only while the inbox is open, so opening it makes them anew.
+	inboxOpen := a.inbox.open
+	items := a.inboxItems()
+	ui.Column(c.Key("desktop-layout")).Fill().Children(func() {
+		if prefs.DesktopLayout == "sidebar" {
+			a.sidebarLayout(c, k, c.TitleBar(), len(items))
+		} else {
+			a.compactTitleBar(c, k, c.TitleBar(), len(items))
+			a.desktopContent(c, k)
+		}
 	})
 	if a.err != "" {
 		a.errorBanner(c, k)
@@ -38,6 +42,10 @@ func (a *App) view(c *ui.Context) {
 	a.palette(c, k)
 	a.settingsPage(c, k)
 	a.desktopConnectionDialog(c, k)
+	if a.inbox.open && !inboxOpen {
+		items = a.inboxItems()
+	}
+	a.inboxView(c, items)
 	if a.saveDue && time.Since(a.lastSave) > time.Second {
 		a.save()
 	}
@@ -50,6 +58,14 @@ func (a *App) view(c *ui.Context) {
 			a.win.SetTitle(title)
 		}
 	}
+}
+
+func (a *App) desktopContent(c *ui.Context, k *colors) {
+	ui.Column(c.Key("desktop-content")).Grow(1).MinWidth(0).MinHeight(0).Children(func() {
+		if t := a.tab(); t != nil {
+			a.tabContent(c, k, t)
+		}
+	})
 }
 
 // iconButton is a borderless button of an icon, with a face on hover;
@@ -272,53 +288,21 @@ func (a *App) paneCard(c *ui.Context, k *colors, t *Tab, p *Pane) ui.Element {
 	return card
 }
 
-// status is what a pane is doing.
-type status int
-
-const (
-	statusIdle      status = iota // a shell at its prompt
-	statusRunning                 // a program printing
-	statusQuiet                   // a program running quietly
-	statusAttention               // done or ringing out of sight
-)
-
-func (a *App) statusOf(c *ui.Context, p *Pane) status {
+// paneRunning tells that a pane's agent is at work, or that its program
+// printed just now, rather than waiting, done or running quietly.
+func paneRunning(c *ui.Context, p *Pane) bool {
 	if s := paneAgentState(p); s.State != "" {
-		switch s.State {
-		case "running":
-			return statusRunning
-		case "waiting", "failed":
-			return statusAttention
-		default:
-			return statusQuiet
-		}
+		return s.State == "running"
 	}
-	if p.attention {
-		return statusAttention
-	}
-	if p.info.Idle || p.info.Program == "" || programOf(p.info.Program).Shell {
-		return statusIdle
+	if p.attention || p.info.Idle || p.info.Program == "" || programOf(p.info.Program).Shell {
+		return false
 	}
 	last := time.Unix(0, p.lastData.Load())
 	if since := c.Now().Sub(last); since < activeFor {
 		c.After(activeFor - since)
-		return statusRunning
+		return true
 	}
-	return statusQuiet
-}
-
-// activityDot is the dot of a program printing: a solid dot in a soft
-// halo. It does not animate, as drawing frames all along would cost more
-// than it tells.
-func activityDot(c *ui.Context, col ui.Color, size float32) ui.Element {
-	e := ui.Box(c).Size(size+6, size+6).Margin(0, 0, 0, 1).Tooltip("Printing")
-	e.Draw(func(p *ui.Painter, r ui.Rect) {
-		cx, cy := r.X+r.W/2, r.Y+r.H/2
-		halo := size/2 + 2.5
-		p.Fill(ui.Rect{X: cx - halo, Y: cy - halo, W: 2 * halo, H: 2 * halo}, col.Alpha(0.22), halo)
-		p.Fill(ui.Rect{X: cx - size/2, Y: cy - size/2, W: size, H: size}, col, size/2)
-	})
-	return e
+	return false
 }
 
 // errorBanner shows what went wrong with the server.

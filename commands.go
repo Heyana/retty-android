@@ -31,6 +31,7 @@ var (
 	cmdPrevTab     = command{Title: "Previous Tab", Accel: "Ctrl+Shift+Tab", Keys: "⌃⇧Tab", Run: func(a *App) { a.cycleTab(-1) }}
 	cmdRenameTab   = command{Title: "Rename Tab…", Accel: "CmdOrCtrl+Shift+R", Keys: "⇧⌘R", Run: func(a *App) { a.startRename() }}
 	cmdPalette     = command{Title: "Command Palette…", Accel: "CmdOrCtrl+Shift+P", Keys: "⇧⌘P", Run: func(a *App) { a.openPalette() }, Hidden: true}
+	cmdInbox       = command{Title: "待处理…", Accel: "CmdOrCtrl+Shift+I", Keys: "⇧⌘I", Run: func(a *App) { a.openInbox() }}
 	cmdPalette2    = command{Title: "Go to Pane…", Accel: "CmdOrCtrl+P", Keys: "⌘P", Run: func(a *App) { a.openPalette() }, Hidden: true}
 	cmdFocusLeft   = command{Title: "Focus Pane Left", Accel: "CmdOrCtrl+Alt+Left", Keys: "⌥⌘←", Run: func(a *App) { a.moveFocus(-1, 0) }}
 	cmdFocusRight  = command{Title: "Focus Pane Right", Accel: "CmdOrCtrl+Alt+Right", Keys: "⌥⌘→", Run: func(a *App) { a.moveFocus(1, 0) }}
@@ -57,6 +58,7 @@ var (
 
 // paletteCommands are those the command palette lists, before the tabs.
 var paletteCommands = []*command{
+	&cmdInbox,
 	&cmdSettings,
 	&cmdNewTab, &cmdSplitRight, &cmdSplitDown, &cmdZoom, &cmdEqualize, &cmdClosePane, &cmdCloseTab,
 	&cmdNextTab, &cmdPrevTab, &cmdRenameTab,
@@ -82,7 +84,6 @@ func (a *App) menu() *mygo.Menu {
 		mygo.Separator(),
 	}
 	for i := 1; i <= 9; i++ {
-		i := i
 		tabItems = append(tabItems, &mygo.MenuItem{
 			Label: fmt.Sprintf("Show Tab %d", i), Accelerator: fmt.Sprintf("CmdOrCtrl+%d", i),
 			Click: func(*mygo.MenuItem, *mygo.Window) {
@@ -142,6 +143,7 @@ func (a *App) menu() *mygo.Menu {
 			item(&cmdClear),
 		}},
 		{Label: "View", Submenu: []*mygo.MenuItem{
+			item(&cmdInbox),
 			item(&cmdPalette),
 			item(&cmdPalette2),
 			mygo.Separator(),
@@ -218,6 +220,7 @@ func (a *App) cycleTab(d int) {
 func (a *App) startRename() {
 	if t := a.tab(); t != nil {
 		a.renaming, a.renameText, a.renameFocus = t, t.Name, false
+		a.sidebarVisibleTab = nil
 		a.focusReq = nil // the field takes the focus
 	}
 }
@@ -258,28 +261,14 @@ func (a *App) restartFocused() {
 		cols, rows = old.term.Size()
 	}
 	p := a.newPane(a.currentDir(), cols, rows)
-	p.Tab, p.Node = t, old.Node
-	old.Node.Pane = p
-	old.closed = true
-	if old.term != nil {
-		old.term.Close()
-	}
-	go a.paneClient(old).Kill(old.SID)
-	if t.Zoom == old {
-		t.Zoom = p
-	}
-	t.Focus = nil
-	t.setFocus(p)
-	a.focusReq = p
-	a.changed()
+	a.endPane(old, true)
+	a.replacePane(old, p)
 }
 
 func (a *App) quitAndEnd() {
 	a.quitting = true
-	for _, t := range a.tabs {
-		for _, p := range t.panes() {
-			p.closed = true
-		}
+	for _, p := range a.allPanes() {
+		p.closed = true
 	}
 	c := a.client
 	go func() {
@@ -289,6 +278,7 @@ func (a *App) quitAndEnd() {
 }
 
 func (a *App) openPalette() {
+	a.inbox.open = false
 	a.settingsOpen = false
 	a.paletteOpen, a.paletteQuery = true, ""
 	a.focusReq = nil // the palette takes the focus
@@ -298,12 +288,20 @@ func (a *App) openPalette() {
 // Control-Tab is a menu accelerator so AppKit handles it before its own
 // key-view navigation. The original bracket shortcuts remain aliases.
 func (a *App) shortcuts(c *ui.Context) {
+	if c.Shortcut(ui.Cmd|ui.Shift, ui.KeyI) {
+		a.openInbox()
+		c.Invalidate()
+	}
 	if c.Shortcut(ui.Cmd, ui.KeyComma) {
 		a.openSettings()
 		c.Invalidate()
 	}
-	if a.settingsOpen || a.desktops.open {
+	if a.settingsOpen || a.desktops.open || a.inbox.open {
 		return
+	}
+	if !a.paletteOpen && prefs.DesktopLayout == "sidebar" && c.Shortcut(ui.Ctrl|ui.Cmd, ui.KeyS) {
+		a.toggleTabSidebar()
+		c.Invalidate()
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyF) {
 		a.openFind()
@@ -347,7 +345,6 @@ func (a *App) paletteItems() []paletteItem {
 			if !match(fmt.Sprintf("%s %s tab %d", name, detail, ti+1)) {
 				continue
 			}
-			ti, t, p := ti, t, p
 			items = append(items, paletteItem{
 				id: fmt.Sprintf("pane:%d:%d", t.ID, p.ID), title: name, detail: detail, glyph: paneProgram(p).Glyph,
 				keys: fmt.Sprintf("Tab %d", ti+1),
@@ -363,7 +360,6 @@ func (a *App) paletteItems() []paletteItem {
 		if cmd.Hidden || !match(cmd.Title) {
 			continue
 		}
-		cmd := cmd
 		items = append(items, paletteItem{id: "command:" + cmd.Title, title: cmd.Title, keys: cmd.Keys, glyph: "command", run: func() { cmd.Run(a) }})
 	}
 	return items

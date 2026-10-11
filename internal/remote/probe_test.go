@@ -11,6 +11,23 @@ import (
 	"retty/internal/rex"
 )
 
+// Probe checks whether the saved capability reaches a responding Retty server.
+// It sends only hello: no device registration, session list or terminal attach.
+func Probe(ctx context.Context, raw string) error {
+	client, closeTunnel, err := connect(ctx, raw, false, nil, nil)
+	if err != nil {
+		return err
+	}
+	defer closeTunnel()
+	defer client.Close()
+	return probeClient(ctx, client)
+}
+
+func probeClient(ctx context.Context, client *rex.Client) error {
+	_, _, err := readDesktopInfo(ctx, client, false)
+	return err
+}
+
 func TestProbeHandshakeDoesNotRegisterPhone(t *testing.T) {
 	server, peer := net.Pipe()
 	defer server.Close()

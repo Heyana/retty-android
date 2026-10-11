@@ -103,17 +103,7 @@ func (m *mobileApp) registerSystemPush() {
 }
 func (m *mobileApp) setPushEnabled(enabled bool) {
 	m.pushDisabled = !enabled
-	if m.store != nil && m.storage != nil {
-		value := []byte("0")
-		if enabled {
-			value = []byte("1")
-		}
-		m.storage <- func() {
-			if m.store.Set("notifications-enabled", value) != nil {
-				mygo.RunOnMain(func() { m.pushError = "无法保存通知设置"; m.invalidate() })
-			}
-		}
-	}
+	m.save("notifications-enabled", keychainBool(enabled), func() { m.pushError = "无法保存通知设置"; m.invalidate() })
 	m.refreshPushSnapshot()
 	m.syncPushRegistration()
 	if enabled {
@@ -122,10 +112,7 @@ func (m *mobileApp) setPushEnabled(enabled bool) {
 	m.invalidate()
 }
 func (m *mobileApp) taskNoticeID(session rex.SessionInfo) string {
-	if m.hello.Version < 5 {
-		session.Agent.CompletionRevision = 0
-	}
-	return rex.AgentNoticeID(m.desktopKey(), session)
+	return inboxNoticeID(m.hello, m.desktopKey(), session)
 }
 func (m *mobileApp) rememberNotice(id string) bool {
 	if !strings.HasPrefix(id, "retty-agent-") || len(id) > 64 {
@@ -149,16 +136,7 @@ func (m *mobileApp) trimNoticeReceipts() {
 			delete(m.noticeReceipts, id)
 		}
 	}
-	for len(m.noticeReceipts) > 128 {
-		oldest := ""
-		var at time.Time
-		for key, t := range m.noticeReceipts {
-			if oldest == "" || t.Before(at) {
-				oldest, at = key, t
-			}
-		}
-		delete(m.noticeReceipts, oldest)
-	}
+	trimReceipts(m.noticeReceipts, 128)
 }
 func (m *mobileApp) mergeNoticeReceipts(saved map[string]time.Time) {
 	if m.noticeReceipts == nil {
@@ -174,12 +152,9 @@ func (m *mobileApp) mergeNoticeReceipts(saved map[string]time.Time) {
 	m.persistNoticeReceipts()
 }
 func (m *mobileApp) persistNoticeReceipts() {
-	if !m.noticeReceiptsLoaded || m.store == nil || m.storage == nil {
-		return
-	}
-	data, err := json.Marshal(m.noticeReceipts)
-	if err == nil {
-		m.storage <- func() { _ = m.store.Set("notification-receipts", data) }
+	if m.noticeReceiptsLoaded {
+		data, _ := json.Marshal(m.noticeReceipts)
+		m.save("notification-receipts", data, nil)
 	}
 }
 func (m *mobileApp) refreshPushSnapshot() {

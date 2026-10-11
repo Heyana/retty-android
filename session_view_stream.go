@@ -16,6 +16,12 @@ type sessionTransport interface {
 	HasScreenSize() bool
 }
 
+// snapshotReader is a transport that sends the session's screen whole
+// before its output.
+type snapshotReader interface {
+	ReadSnapshot() ([]byte, int, int, error)
+}
+
 type sessionViewStream struct {
 	mu            sync.Mutex
 	cond          *sync.Cond
@@ -30,9 +36,7 @@ type sessionViewStream struct {
 }
 
 func newSessionViewStream(stream sessionTransport, failed func()) *sessionViewStream {
-	_, initialSnapshot := stream.(interface {
-		ReadSnapshot() ([]byte, int, int, error)
-	})
+	_, initialSnapshot := stream.(snapshotReader)
 	s := &sessionViewStream{current: stream, failed: failed, reset: initialSnapshot, paused: initialSnapshot}
 	s.cond = sync.NewCond(&s.mu)
 	return s
@@ -69,14 +73,11 @@ func (s *sessionViewStream) failure(stream sessionTransport) {
 		s.input = nil
 	}
 	s.mu.Unlock()
-	if inputFailed && !active {
+	if active || inputFailed {
 		stream.Close()
 	}
-	if active {
-		stream.Close()
-		if s.failed != nil {
-			s.failed()
-		}
+	if active && s.failed != nil {
+		s.failed()
 	}
 }
 
@@ -109,9 +110,7 @@ func (s *sessionViewStream) readScreen(p []byte, snapshots bool) (int, int, int,
 			return 0, 0, 0, nil, io.EOF
 		}
 		if snapshots && reset {
-			if source, ok := stream.(interface {
-				ReadSnapshot() ([]byte, int, int, error)
-			}); ok {
+			if source, ok := stream.(snapshotReader); ok {
 				data, cols, rows, err := source.ReadSnapshot()
 				s.mu.Lock()
 				active := s.current == stream && !s.closed

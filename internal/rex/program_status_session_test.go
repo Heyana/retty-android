@@ -86,7 +86,7 @@ IFS= read -r command
 		t.Fatal("completion did not survive next prompt", done.Agent)
 	}
 	// A newer hook for this same task cannot duplicate the protocol result.
-	if err := s.reportAgent(s.agentToken, &AgentEvent{Agent: "claude", At: time.Now(), Input: agents.HookInput{SessionID: "hook-thread", Event: "Stop"}}); err != nil {
+	if _, _, err := s.reportAgent(s.agentToken, &AgentEvent{Agent: "claude", At: time.Now(), Input: agents.HookInput{SessionID: "hook-thread", Event: "Stop"}}); err != nil {
 		t.Fatal(err)
 	}
 	if !s.info().Agent.Equal(done.Agent) {
@@ -98,7 +98,7 @@ IFS= read -r command
 		t.Fatal("clear resurrected stale hook completion")
 	}
 	// Starting another integrated program can use hooks if it emits no OSC.
-	if err := s.reportAgent(s.agentToken, &AgentEvent{Agent: "claude", At: time.Now(), Input: agents.HookInput{SessionID: "new-thread", Event: "UserPromptSubmit"}}); err != nil {
+	if _, _, err := s.reportAgent(s.agentToken, &AgentEvent{Agent: "claude", At: time.Now(), Input: agents.HookInput{SessionID: "new-thread", Event: "UserPromptSubmit"}}); err != nil {
 		t.Fatal(err)
 	}
 	next := waitProgramStatus(t, s, agents.Running)
@@ -142,13 +142,13 @@ func TestProgramStatusRejectedHookCannotClearRecords(t *testing.T) {
 	now := time.Now()
 	for i, thread := range []string{"retired", "current"} {
 		e := &AgentEvent{Agent: "claude", At: now.Add(time.Duration(i) * time.Millisecond), Input: agents.HookInput{SessionID: thread, Event: "UserPromptSubmit"}}
-		if err := s.reportAgent("fixture", e); err != nil {
+		if _, _, err := s.reportAgent("fixture", e); err != nil {
 			t.Fatal(err)
 		}
 	}
 	s.programStatus.feed([]byte(statusOSC("state=done:app=fixture")), now.Add(2*time.Millisecond))
 	e := &AgentEvent{Agent: "claude", At: now.Add(3 * time.Millisecond), Input: agents.HookInput{SessionID: "retired", Event: "UserPromptSubmit"}}
-	if err := s.reportAgent("fixture", e); err != nil {
+	if _, _, err := s.reportAgent("fixture", e); err != nil {
 		t.Fatal(err)
 	}
 	if len(s.programStatus.records) != 1 || s.agent.state.SessionID != "current" {

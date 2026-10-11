@@ -91,11 +91,7 @@ func (b *Bridge) serveImage(conn net.Conn, reader io.Reader, req rex.ImagePasteR
 		fail("图片正在粘贴，请稍后再试")
 		return
 	}
-	parent := b.imageContext
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(parent, rex.ImagePasteTimeout)
+	ctx, cancel := context.WithTimeout(b.imageContext, rex.ImagePasteTimeout)
 	defer cancel()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()

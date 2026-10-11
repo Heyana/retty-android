@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/egoist/mygo"
+	"retty/internal/remote"
 	"retty/internal/rex"
 	"time"
 )
@@ -48,28 +48,13 @@ func (m *mobileApp) closeConnectionAfterSizeRelease() {
 		if released != nil {
 			<-released
 		}
-		if client != nil {
-			client.Close()
-		}
-		if closeTunnel != nil {
-			closeTunnel()
-		}
+		remote.CloseConnection(client, closeTunnel)
 	}()
 }
 
 func (m *mobileApp) setSizeLock(enabled bool) {
 	m.sizeLock = enabled
-	if m.store != nil && m.storage != nil {
-		value := []byte("0")
-		if enabled {
-			value = []byte("1")
-		}
-		m.storage <- func() {
-			if m.store.Set("size-lock", value) != nil {
-				mygo.RunOnMain(func() { m.error = "无法保存尺寸设置"; m.invalidate() })
-			}
-		}
-	}
+	m.save("size-lock", keychainBool(enabled), func() { m.error = "无法保存尺寸设置"; m.invalidate() })
 	m.invalidate()
 }
 
@@ -77,14 +62,7 @@ func (m *mobileApp) setSizeLock(enabled bool) {
 // A lock a window released meanwhile is not taken back.
 func (m *mobileApp) reattach(s rex.SessionInfo) {
 	if !m.lockSuspended && m.locksSize() && m.stream != nil && m.term != nil && s.SizeLock != m.lockOwner {
-		m.lockLost = true
-		if s.SizeLock != "" {
-			m.resumeSID = ""
-			m.detach()
-			m.invalidate()
-			return
-		}
-		m.openSession(s)
+		m.loseSizeLock(s)
 		return
 	}
 	m.lockSuspended, m.lockSeen = false, false
@@ -112,6 +90,13 @@ func (m *mobileApp) followSizeLock(s rex.SessionInfo) {
 	if !m.lockSeen && (!holds || time.Since(since) < 3*time.Second) {
 		return
 	}
+	m.loseSizeLock(s)
+}
+
+// loseSizeLock gives the size back to the window that took it. The phone
+// leaves a session another device now sizes; a released one reopens as a
+// local reflow.
+func (m *mobileApp) loseSizeLock(s rex.SessionInfo) {
 	m.lockLost = true
 	if s.SizeLock != "" {
 		m.resumeSID = ""
@@ -120,4 +105,12 @@ func (m *mobileApp) followSizeLock(s rex.SessionInfo) {
 		return
 	}
 	m.openSession(s)
+}
+
+// keychainBool encodes a boolean setting as Keychain stores it.
+func keychainBool(on bool) []byte {
+	if on {
+		return []byte("1")
+	}
+	return []byte("0")
 }

@@ -57,19 +57,15 @@ func (m *mobileApp) connectionLost() {
 	m.scheduleRetry()
 }
 
-func mobileRetryDelay(attempt int) time.Duration {
-	return remote.RetryDelay(attempt)
-}
-
 func (m *mobileApp) scheduleRetry() {
-	if m.background || !m.reconnecting || m.connectionIssue != nil && !m.connectionIssue.automatic {
+	if m.background || !m.reconnecting || m.manualIssue() {
 		return
 	}
 	if m.retryTimer != nil {
 		m.retryTimer.Stop()
 	}
 	generation := m.generation
-	delay := mobileRetryDelay(m.retryAttempt)
+	delay := remote.RetryDelay(m.retryAttempt)
 	if m.retryAttempt == 0 {
 		delay = 0
 	}

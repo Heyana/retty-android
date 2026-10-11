@@ -97,7 +97,7 @@ func TestDiagnosticsBoundEventsAndFreezeAfterFinish(t *testing.T) {
 
 func TestConnectDiagnosticsInvalidLinkWithoutNetwork(t *testing.T) {
 	trace := NewDiagnostics(false, 1, time.Second)
-	client, closeTunnel, err := ConnectWithDiagnostics(context.Background(), "secret-invalid-link", trace)
+	client, closeTunnel, err := connect(context.Background(), "secret-invalid-link", true, trace, nil)
 	if client != nil || closeTunnel != nil || Failure(err) != InvalidLink {
 		t.Fatal("invalid link attempted a connection")
 	}

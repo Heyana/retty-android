@@ -49,10 +49,11 @@ func (a *App) unlockSize(p *Pane) {
 		return
 	}
 	p.unlocking = true
-	sid, client := p.SID, a.paneClient(p)
+	// The window is the main thread's to read, as it closes there.
+	sid, client, update := p.SID, a.paneClient(p), a.desktopDispatcher()
 	go func() {
 		err := client.UnlockSize(sid, 0, 0)
-		a.post(func() {
+		update(func() {
 			p.unlocking = false
 			if err != nil {
 				a.err = err.Error()
@@ -66,9 +67,6 @@ func (a *App) unlockSize(p *Pane) {
 			}
 			p.term.SetFixedSize(0, 0)
 		})
-		if a.win != nil {
-			a.win.Invalidate()
-		}
 	}()
 }
 

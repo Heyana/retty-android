@@ -78,6 +78,9 @@ type programStatusTracker struct {
 	state      byte
 	length     int
 	osc        []byte
+	// atPrompt tells that OSC 133 marks an active prompt. Only an active
+	// prompt needs clearing before its right-hand padding reflows.
+	atPrompt bool
 }
 
 // feed observes the original PTY stream, retaining only a bounded OSC payload.
@@ -154,16 +157,26 @@ func (t *programStatusTracker) feed(data []byte, now time.Time) int {
 
 func (t *programStatusTracker) finish(now time.Time) bool {
 	body := string(t.osc)
-	if strings.HasPrefix(body, "133;A") && (len(body) == 5 || body[5] == ';') {
-		t.processExit(now)
-		return false
-	}
-	if strings.HasPrefix(body, "133;C") && (len(body) == 5 || body[5] == ';') {
-		// Starting the next shell command acknowledges previous results.
-		// Merely returning to the prompt must still preserve them.
-		t.acknowledge()
-		if !t.lastReport.IsZero() {
-			t.lastReport = now
+	if mark, ok := strings.CutPrefix(body, "133;"); ok {
+		if mark == "" || len(mark) > 1 && mark[1] != ';' {
+			return false
+		}
+		switch mark[0] {
+		case 'A':
+			t.atPrompt = true
+			t.processExit(now)
+		case 'P', 'B', 'I':
+			t.atPrompt = true
+		case 'C':
+			t.atPrompt = false
+			// Starting the next shell command acknowledges previous results.
+			// Merely returning to the prompt must still preserve them.
+			t.acknowledge()
+			if !t.lastReport.IsZero() {
+				t.lastReport = now
+			}
+		case 'D':
+			t.atPrompt = false
 		}
 		return false
 	}

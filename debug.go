@@ -60,10 +60,8 @@ func (a *App) debug(dir, line string) {
 			}
 		})
 	case "size":
-		var w, h int
-		if _, err := fmtSscan(arg, &w, &h); err == nil {
-			win.SetSize(w, h)
-		}
+		w, h, _ := strings.Cut(arg, " ")
+		win.SetSize(atoi(w), atoi(h))
 	default:
 		for _, cmd := range append(paletteCommands, &cmdPalette, &cmdClear) {
 			if strings.EqualFold(strings.ReplaceAll(cmd.Title, " ", "-"), verb) {
@@ -76,8 +74,8 @@ func (a *App) debug(dir, line string) {
 		case "focus":
 			win.Update(func() {
 				if t := a.tab(); t != nil {
-					if ps := t.panes(); atoi(arg)-1 < len(ps) {
-						t.setFocus(ps[atoi(arg)-1])
+					if i, ps := atoi(arg)-1, t.panes(); i >= 0 && i < len(ps) {
+						t.setFocus(ps[i])
 						a.focusReq = t.Focus
 					}
 				}
@@ -110,10 +108,4 @@ func atoi(s string) int {
 		}
 	}
 	return n
-}
-
-func fmtSscan(s string, w, h *int) (int, error) {
-	a, b, _ := strings.Cut(s, " ")
-	*w, *h = atoi(a), atoi(b)
-	return 2, nil
 }

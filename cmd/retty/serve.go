@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"retty/internal/atomicfile"
 	"retty/internal/remote"
 	"retty/internal/rex"
 	"retty/internal/terminal/screen"
@@ -207,23 +208,5 @@ func serve(ctx context.Context, output, diagnostics io.Writer, linkFile string, 
 }
 
 func saveLink(path, link string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".connect-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	if _, err = fmt.Fprintln(f, link); err == nil {
-		err = f.Sync()
-	}
-	closed := f.Close()
-	if err != nil {
-		return err
-	}
-	if closed != nil {
-		return closed
-	}
-	return os.Rename(f.Name(), path)
+	return atomicfile.Write(path, []byte(link+"\n"))
 }

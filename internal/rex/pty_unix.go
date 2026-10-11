@@ -66,6 +66,18 @@ func (p *pty) foreground() int {
 	return pg
 }
 
+// foregroundOrShell returns the foreground process group, or the session's
+// own process when the terminal reports none.
+func (p *pty) foregroundOrShell() int {
+	if pg := p.foreground(); pg > 0 {
+		return pg
+	}
+	if p.cmd.Process != nil {
+		return p.cmd.Process.Pid
+	}
+	return 0
+}
+
 // wait waits for the process and returns its exit code, 128 plus the
 // signal's number for a process a signal ended.
 func (p *pty) wait() int {

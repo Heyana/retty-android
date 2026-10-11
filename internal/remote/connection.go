@@ -14,19 +14,8 @@ const ResumeRecoveryTimeout = 20 * time.Second
 
 // OpenConnection is the common authenticated handshake for phones and desktops.
 // The caller owns a successful transport; failed handshakes clean up themselves.
-func OpenConnection(ctx context.Context, link string, device rex.DeviceInfo, diagnostics ...*Diagnostics) (*rex.Client, func(), rex.Hello, []rex.SessionInfo, error) {
-	var trace *Diagnostics
-	if len(diagnostics) > 0 {
-		trace = diagnostics[0]
-	}
-	return openConnection(ctx, link, device, trace, nil)
-}
-
-func OpenConnectionWithQuality(ctx context.Context, link string, device rex.DeviceInfo, quality *Quality) (*rex.Client, func(), rex.Hello, []rex.SessionInfo, error) {
-	return openConnection(ctx, link, device, nil, quality)
-}
-
-func openConnection(ctx context.Context, link string, device rex.DeviceInfo, trace *Diagnostics, quality *Quality) (*rex.Client, func(), rex.Hello, []rex.SessionInfo, error) {
+// Trace and quality are optional and may be nil.
+func OpenConnection(ctx context.Context, link string, device rex.DeviceInfo, trace *Diagnostics, quality *Quality) (*rex.Client, func(), rex.Hello, []rex.SessionInfo, error) {
 	client, tunnel, err := connect(ctx, link, true, trace, quality)
 	var hello rex.Hello
 	var sessions []rex.SessionInfo
@@ -56,7 +45,7 @@ func CloseConnection(client *rex.Client, tunnel func()) {
 		client.Close()
 	}
 	if tunnel != nil {
-		go tunnel()
+		tunnel() // Returns at once; the tunnel drains in the background.
 	}
 }
 
@@ -87,24 +76,91 @@ func checkConnection(ctx, active context.Context, client *rex.Client, info *rex.
 	return sessions, err
 }
 
-// ResumeConnection checks a retained control socket, then redials on the same
-// authenticated tunnel. It never restarts the session server or replays input.
+// A retained socket that has not answered within this delay is probably
+// dead after a suspension or network change. Redial alongside the check
+// rather than waiting out its timeout, and keep whichever answers first.
+const resumeRedialDelay = 2 * time.Second
+
+// ResumeConnection checks a retained control socket, and redials on the same
+// authenticated tunnel when the check fails or is slow. It never restarts the
+// session server or replays input.
 func ResumeConnection(ctx context.Context, client *rex.Client, info *rex.DeviceInfo) (*rex.Client, rex.Hello, []rex.SessionInfo, error) {
-	checkCtx, cancel := context.WithTimeout(ctx, ResumeCheckTimeout)
-	sessions, err := CheckConnection(checkCtx, client, info)
-	cancel()
-	if err == nil {
-		return client, rex.Hello{}, sessions, nil
+	return resumeConnection(ctx, client, info, resumeRedialDelay)
+}
+
+func resumeConnection(ctx context.Context, client *rex.Client, info *rex.DeviceInfo, delay time.Duration) (*rex.Client, rex.Hello, []rex.SessionInfo, error) {
+	type result struct {
+		client   *rex.Client
+		hello    rex.Hello
+		sessions []rex.SessionInfo
+		err      error
+	}
+	results := make(chan result, 2)
+	checkCtx, cancelCheck := context.WithTimeout(ctx, ResumeCheckTimeout)
+	defer cancelCheck()
+	go func() {
+		sessions, err := CheckConnection(checkCtx, client, info)
+		results <- result{client, rex.Hello{}, sessions, err}
+	}()
+	redialCtx, cancelRedial := context.WithCancel(ctx)
+	defer cancelRedial()
+	redialing := false
+	redial := func() {
+		redialing = true
+		go func() {
+			next, hello, sessions, err := redialConnection(redialCtx, client, info)
+			results <- result{next, hello, sessions, err}
+		}()
+	}
+	start := time.NewTimer(delay)
+	defer start.Stop()
+	var failure error
+	for pending := 1; pending > 0; {
+		select {
+		case <-start.C:
+			if !redialing {
+				redial()
+				pending++
+			}
+			continue
+		case r := <-results:
+			pending--
+			if r.err == nil {
+				// The loser's late connection must not leak.
+				if pending > 0 {
+					go func() {
+						if late := <-results; late.client != nil && late.client != client && late.err == nil {
+							late.client.Close()
+						}
+					}()
+				}
+				return r.client, r.hello, r.sessions, nil
+			}
+			// A redial's failure, such as a protocol mismatch, explains
+			// more than the stale socket's.
+			if r.client != client || failure == nil {
+				failure = r.err
+			}
+			if !redialing && ctx.Err() == nil {
+				redial()
+				pending++
+			}
+		}
 	}
 	if ctx.Err() != nil {
-		return nil, rex.Hello{}, nil, ctx.Err()
+		failure = ctx.Err()
 	}
+	return nil, rex.Hello{}, nil, failure
+}
+
+func redialConnection(ctx context.Context, client *rex.Client, info *rex.DeviceInfo) (*rex.Client, rex.Hello, []rex.SessionInfo, error) {
 	next, err := client.Redial(ctx)
 	if err != nil {
 		return nil, rex.Hello{}, nil, err
 	}
 	stop := context.AfterFunc(ctx, func() { next.Close() })
 	var hello rex.Hello
+	var sessions []rex.SessionInfo
 	if info != nil {
 		hello, err = next.HelloFrom(*info)
 	} else {
@@ -130,11 +186,12 @@ func ResumeConnection(ctx context.Context, client *rex.Client, info *rex.DeviceI
 // WatchConnection is the shared foreground connection maintenance loop. Stopping
 // it does not destroy a retained tunnel: an in-flight bounded request can finish.
 // Delivery runs on this goroutine; consumers dispatch and reject stale UI work.
-func WatchConnection(ctx context.Context, client *rex.Client, device func() *rex.DeviceInfo, deliver func([]rex.SessionInfo, error), quality ...*Quality) {
-	watchConnection(ctx, client, device, deliver, 2*time.Second, ResumeCheckTimeout, quality...)
+// A nil quality records nothing.
+func WatchConnection(ctx context.Context, client *rex.Client, device func() *rex.DeviceInfo, deliver func([]rex.SessionInfo, error), quality *Quality) {
+	watchConnection(ctx, client, device, deliver, 2*time.Second, ResumeCheckTimeout, quality)
 }
 
-func watchConnection(ctx context.Context, client *rex.Client, device func() *rex.DeviceInfo, deliver func([]rex.SessionInfo, error), interval, timeout time.Duration, quality ...*Quality) {
+func watchConnection(ctx context.Context, client *rex.Client, device func() *rex.DeviceInfo, deliver func([]rex.SessionInfo, error), interval, timeout time.Duration, quality *Quality) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {
@@ -163,8 +220,8 @@ func watchConnection(ctx context.Context, client *rex.Client, device func() *rex
 		if ctx.Err() != nil {
 			return
 		}
-		if len(quality) > 0 && quality[0] != nil {
-			quality[0].RecordRequest(time.Now(), elapsed, err)
+		if quality != nil {
+			quality.RecordRequest(time.Now(), elapsed, err)
 		}
 		deliver(sessions, err)
 		if err != nil {

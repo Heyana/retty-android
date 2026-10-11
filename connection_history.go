@@ -104,12 +104,14 @@ func readDesktopHistory(store connectionRecordStore) []desktopRecent {
 	}
 	return mergeDesktopHistory(history, nil)
 }
-func writeDesktopHistory(store connectionRecordStore, history []desktopRecent) error {
-	data, err := json.Marshal(history)
-	if err != nil {
-		return err
+
+// loadRecord reads a JSON record of the store, the zero value when it is
+// missing or unreadable.
+func loadRecord[T any](store connectionRecordStore, key string) (v T) {
+	if data, err := store.Get(key); err == nil {
+		json.Unmarshal(data, &v)
 	}
-	return store.Set("history", data)
+	return v
 }
 func connectionStorage() chan func() {
 	storage := make(chan func(), 32)

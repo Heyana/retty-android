@@ -5,6 +5,7 @@ import (
 	"io"
 	"net"
 	"retty/internal/agents"
+	"retty/internal/remote"
 	"retty/internal/rex"
 	"retty/internal/terminal"
 	"strings"
@@ -95,7 +96,7 @@ func TestMobileReconnectRetainsPageAndCancelReleasesTerminal(t *testing.T) {
 		t.Fatal("cancel retained connection resources")
 	}
 	for i := 0; i < 20; i++ {
-		if d := mobileRetryDelay(i); d < time.Second || d > 5*time.Second {
+		if d := remote.RetryDelay(i); d < time.Second || d > 5*time.Second {
 			t.Fatal(d)
 		}
 	}

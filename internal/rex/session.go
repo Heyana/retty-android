@@ -48,7 +48,6 @@ type session struct {
 	lastInput   time.Time
 	resync      *time.Timer
 	resizeAt    time.Time
-	prompt      promptTracker
 	exited      bool
 	code        int
 	cols, rows  int
@@ -69,8 +68,6 @@ type attached struct {
 	once         sync.Once
 	screenFrames bool
 }
-
-func (a *attached) send(p []byte) bool { return a.sendScreen(p, 0, 0) }
 
 func (a *attached) sendScreen(p []byte, cols, rows int) bool {
 	if a.screenFrames {
@@ -251,16 +248,10 @@ func (s *session) read() {
 				s.p.master.Write([]byte(programStatusReply))
 			}
 			s.mu.Lock()
-			s.prompt.feed(data)
 			s.vt.Feed(data)
 			s.output += uint64(n)
 			s.lastOutput = time.Now()
-			for a := range s.clients {
-				if !a.sendScreen(data, s.cols, s.rows) {
-					a.finish()
-					delete(s.clients, a)
-				}
-			}
+			s.broadcastLocked(data)
 			s.mu.Unlock()
 		}
 		if err != nil {
@@ -460,7 +451,7 @@ func (s *session) resizeLocked(cols, rows int) bool {
 		s.resizeAt = time.Now()
 		// Clear a marked prompt at its old width before reflow. A right
 		// prompt's padding would otherwise wrap into extra prompt rows.
-		if s.prompt.active && cols != oldCols {
+		if s.programStatus.atPrompt && cols != oldCols {
 			s.vt.Resize(oldCols, rows+1)
 		}
 		s.vt.Resize(cols, rows)
@@ -527,12 +518,7 @@ func (s *session) resend(force bool) {
 	// and the snapshot. Keep the previous frame visible until all of it
 	// arrives, rather than briefly drawing an empty or partial screen.
 	msg = append(append([]byte("\x1b[?2026h"), msg...), []byte("\x1b[?2026l")...)
-	for a := range s.clients {
-		if !a.sendScreen(msg, s.cols, s.rows) {
-			a.finish()
-			delete(s.clients, a)
-		}
-	}
+	s.broadcastLocked(msg)
 }
 
 // clear keeps the authoritative screen in step with Command-K.
@@ -541,8 +527,14 @@ func (s *session) clear() {
 	defer s.mu.Unlock()
 	data := []byte("\x1b[H\x1b[2J\x1b[3J")
 	s.vt.Feed(data)
+	s.broadcastLocked(data)
+}
+
+// broadcastLocked sends output to every attached client at the current
+// size, dropping clients that fell too far behind. s.mu must be held.
+func (s *session) broadcastLocked(p []byte) {
 	for a := range s.clients {
-		if !a.sendScreen(data, s.cols, s.rows) {
+		if !a.sendScreen(p, s.cols, s.rows) {
 			a.finish()
 			delete(s.clients, a)
 		}
@@ -595,16 +587,15 @@ func (s *session) info() SessionInfo {
 	if in.Exited {
 		return in
 	}
-	fg := s.p.foreground()
-	if fg <= 0 {
-		fg = in.PID
-	}
+	fg := s.p.foregroundOrShell()
 	p := inspect(fg)
 	_, isAgent := agents.Detect(p.programName(), p.args)
 	in.Idle = fg == in.PID && !isAgent
 	// A crashed/killed agent cannot emit SessionEnd. Do not leave its
 	// last waiting state on a shell prompt. Allow startup hooks to settle.
-	if in.Idle && in.Agent.Source != ProgramStatusSource && time.Since(in.Agent.Updated) > 2*time.Second {
+	// Explicit results remain available to Inbox viewers after one-shot
+	// programs return to the shell; a new turn or SessionEnd clears them.
+	if in.Idle && in.Agent.Source != ProgramStatusSource && in.Agent.State != agents.Completed && in.Agent.State != agents.Failed && time.Since(in.Agent.Updated) > 2*time.Second {
 		in.Agent = AgentState{}
 	}
 	in.Program, in.Args, in.Dir = p.programName(), p.args, p.dir

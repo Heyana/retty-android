@@ -1,10 +1,6 @@
 package main
 
-import (
-	"strings"
-
-	"github.com/egoist/mygo/ui"
-)
+import "github.com/egoist/mygo/ui"
 
 func (m *mobileApp) connectedDevice() desktopRecent {
 	if device, ok := m.recentDesktop(m.desktopKey()); ok {
@@ -17,17 +13,9 @@ func (m *mobileApp) connectedDevice() desktopRecent {
 }
 
 func (m *mobileApp) setDeviceName(name string) {
-	name = strings.TrimSpace(strings.Map(func(r rune) rune {
-		if r < 32 || r == 127 {
-			return -1
-		}
-		return r
-	}, name))
-	if runes := []rune(name); len(runes) > 80 {
-		name = string(runes[:80])
-	}
+	name = cleanName(name)
 	device := m.connectedDevice()
-	if device.ID == "" && device.Link == "" {
+	if device.key() == "" {
 		return
 	}
 	device.Alias = name

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
+	"iter"
 	"log"
 	"os"
 	"slices"
@@ -94,6 +96,8 @@ type Pane struct {
 
 // App is the state of Retty's window.
 type App struct {
+	inbox           inboxState
+	pollSnapshots   map[*desktopHost]map[string]rex.SessionInfo
 	desktops        desktopConnections
 	desktopStorage  chan func()
 	phone           *phonePair
@@ -104,9 +108,10 @@ type App struct {
 	hello           rex.Hello
 	err             string
 
-	tabs   []*Tab
-	active int
-	nextID int
+	tabs              []*Tab
+	active            int
+	nextID            int
+	sidebarVisibleTab *Tab // scroll selection into view only when it changes
 
 	// focusReq asks the view to give the keyboard focus to a pane's
 	// terminal.
@@ -138,8 +143,7 @@ type App struct {
 	agentFinishedNotified map[string]uint64
 	programNoticeLimiter  rex.ProgramNoticeLimiter
 	pushPresence          *desktopPushPresence
-	agentNotices          map[string]func()
-	agentNoticeKinds      map[string]string
+	agentNotices          map[string]agentNotice
 	agentNotify           func(mygo.NotificationOptions, func()) func()
 	openWindow            func()
 	closedSessions        map[string]bool
@@ -241,8 +245,18 @@ func (a *App) attach(p *Pane, cols, rows int) {
 	onSplit := func(down bool) {
 		a.laterFrom(a.services, func() { a.splitPane(p, down) })
 	}
+	options := terminal.Options{
+		Conn:           nopConn{},
+		Font:           termFont,
+		Theme:          lightTerm,
+		DarkTheme:      darkTerm,
+		AdaptiveColors: true,
+		Transparent:    true,
+		CopyRawText:    prefs.CopyRawText,
+		OnSplit:        onSplit,
+	}
 	if p.SID == "" {
-		term, err := terminal.New(terminal.Options{Conn: nopConn{}, Transparent: true, Font: termFont, Theme: lightTerm, DarkTheme: darkTerm, AdaptiveColors: true, OnSplit: onSplit, CopyRawText: prefs.CopyRawText})
+		term, err := terminal.New(options)
 		if err == nil {
 			message := "Could not start a session: " + a.err
 			if p.recoveryError != "" {
@@ -292,47 +306,38 @@ func (a *App) attach(p *Pane, cols, rows int) {
 			a.post(fn)
 		}
 	}
-	options := terminal.Options{
-		Conn:           p.stream,
-		Font:           termFont,
-		Theme:          lightTerm,
-		DarkTheme:      darkTerm,
-		AdaptiveColors: true,
-		Transparent:    true,
-		CopyRawText:    prefs.CopyRawText,
-		OnOpenLink:     func(link terminal.Link) { a.openTerminalLink(p, link) },
-		OnSplit:        onSplit,
-		OnRenderEvent:  func(event terminal.RenderEvent) { logRenderEvent(p.SID, event) },
-		OnTitle: func(title string) {
-			update(func() { p.title = title })
-		},
-		OnBell: func() {
-			update(func() { a.ring(p) })
-		},
-		OnNotify: func(title, body string) {
-			update(func() { a.showTerminalNotice(p, title, body) })
-		},
-		OnExit: func(int) {
-			update(func() {
-				if p.closed || a.quitting || p.stream != stream {
-					return
-				}
-				if p.host == nil {
-					if p.info.Resumed {
-						a.checkAgentRestoreExit(p, stream)
-					} else {
-						a.closePane(p)
-					}
-				} else {
-					p.streamEnded = true
-				}
-			})
-		},
-	}
+	options.Conn = p.stream
 	if p.host != nil {
 		// Only the active pane attaches and supplies its own viewport size.
 		// Reuse the phone's retained-reader and atomic snapshot replacement.
 		options.Conn = p.remoteView
+	}
+	options.OnOpenLink = func(link terminal.Link) { a.openTerminalLink(p, link) }
+	options.OnRenderEvent = func(event terminal.RenderEvent) { logRenderEvent(p.SID, event) }
+	options.OnTitle = func(title string) {
+		update(func() { p.title = title })
+	}
+	options.OnBell = func() {
+		update(func() { a.ring(p) })
+	}
+	options.OnNotify = func(title, body string) {
+		update(func() { a.showTerminalNotice(p, title, body) })
+	}
+	options.OnExit = func(int) {
+		update(func() {
+			if p.closed || a.quitting || p.stream != stream {
+				return
+			}
+			if p.host == nil {
+				if p.info.Resumed {
+					a.checkAgentRestoreExit(p, stream)
+				} else {
+					a.closePane(p)
+				}
+			} else {
+				p.streamEnded = true
+			}
+		})
 	}
 	term, err := terminal.New(options)
 	if err != nil {
@@ -369,11 +374,8 @@ func (a *App) newTab(dir string) *Tab {
 }
 
 func (a *App) newLocalTab(dir string) *Tab {
-	t := &Tab{ID: a.id()}
 	p := a.newPane(dir, 0, 0)
-	t.Root = &Node{ID: a.id(), Pane: p}
-	p.Tab, p.Node = t, t.Root
-	t.setFocus(p)
+	t := a.singlePaneTab(p)
 	at := min(a.active+1, len(a.tabs))
 	a.tabs = slices.Insert(a.tabs, at, t)
 	a.active = at
@@ -445,26 +447,77 @@ func (a *App) split(vertical bool) {
 	a.changed()
 }
 
+// singlePaneTab makes a tab of one pane, which has the focus.
+func (a *App) singlePaneTab(p *Pane) *Tab {
+	t := &Tab{ID: a.id(), Host: p.host}
+	t.Root = &Node{ID: a.id(), Pane: p}
+	p.Tab, p.Node = t, t.Root
+	t.setFocus(p)
+	return t
+}
+
+// allPanes yields every pane of every tab, with its tab.
+func (a *App) allPanes() iter.Seq2[*Tab, *Pane] {
+	return func(yield func(*Tab, *Pane) bool) {
+		for _, t := range a.tabs {
+			for _, p := range t.panes() {
+				if !yield(t, p) {
+					return
+				}
+			}
+		}
+	}
+}
+
+// hostPanes yields the panes of the tabs of a computer, nil for this one.
+func (a *App) hostPanes(h *desktopHost) iter.Seq[*Pane] {
+	return func(yield func(*Pane) bool) {
+		for t, p := range a.allPanes() {
+			if t.Host == h && !yield(p) {
+				return
+			}
+		}
+	}
+}
+
+// endPane closes a pane's terminal. With end, the pane's session ends too:
+// its notice closes and this computer's session is killed, while a remote
+// one only detaches, as closing a remote tab does. Without, as when the
+// window closes, the session goes on.
+func (a *App) endPane(p *Pane, end bool) {
+	p.closed = true
+	if end {
+		a.markPaneClosed(p)
+	}
+	if p.term != nil {
+		a.closePaneTerminal(p)
+	}
+	if sid := cmp.Or(p.SID, p.recoverySID); end && sid != "" && p.host == nil {
+		go a.client.Kill(sid)
+	}
+}
+
+// replacePane puts p in old's place in its tab, zoomed and focused as old
+// was, so that closing p later never gives the focus back to old.
+func (a *App) replacePane(old, p *Pane) {
+	t := old.Tab
+	p.Tab, p.Node = t, old.Node
+	old.Node.Pane = p
+	if t.Zoom == old {
+		t.Zoom = p
+	}
+	t.recent = slices.DeleteFunc(t.recent, func(q *Pane) bool { return q == old })
+	t.setFocus(p)
+	a.focusReq = p
+	a.changed()
+}
+
 // closePane closes a pane and ends its session.
 func (a *App) closePane(p *Pane) {
 	if p.closed {
 		return
 	}
-	p.closed = true
-	a.markPaneClosed(p)
-	if p.term != nil {
-		a.closePaneTerminal(p)
-	}
-	sid := p.SID
-	if sid == "" {
-		sid = p.recoverySID
-	}
-	if sid != "" {
-		c := a.paneClient(p)
-		if p.host == nil {
-			go c.Kill(sid)
-		}
-	}
+	a.endPane(p, true)
 	t := p.Tab
 	if t.Zoom == p {
 		t.Zoom = nil
@@ -532,14 +585,7 @@ func (a *App) removeTab(t *Tab) {
 // closeTab closes a tab and ends the sessions of its panes.
 func (a *App) closeTab(t *Tab) {
 	for _, p := range t.panes() {
-		p.closed = true
-		a.markPaneClosed(p)
-		if p.term != nil {
-			a.closePaneTerminal(p)
-		}
-		if p.SID != "" && p.host == nil {
-			go a.paneClient(p).Kill(p.SID)
-		}
+		a.endPane(p, true)
 	}
 	a.removeTab(t)
 }
@@ -850,7 +896,6 @@ func (a *App) save() {
 		return
 	}
 	a.lastSnapshot = string(b)
-	a.lastSave = time.Now()
 	c := a.client
 	go c.SetLayout(b)
 }
@@ -949,13 +994,9 @@ func (a *App) markSessionClosed(sid string) {
 }
 
 func (a *App) addSessionTab(in rex.SessionInfo) {
-	t := &Tab{ID: a.id()}
 	p := &Pane{ID: a.id(), SID: in.ID, info: in, startDir: in.Dir}
-	t.Root = &Node{ID: a.id(), Pane: p}
-	p.Tab, p.Node = t, t.Root
-	t.setFocus(p)
 	a.attach(p, in.Cols, in.Rows)
-	a.tabs = append(a.tabs, t)
+	a.tabs = append(a.tabs, a.singlePaneTab(p))
 }
 
 // Remote-created sessions share the same server, but not the GUI's layout.
@@ -965,13 +1006,8 @@ func (a *App) syncSessionTabs(byID map[string]rex.SessionInfo) {
 		return
 	}
 	shown := map[string]bool{}
-	for _, t := range a.tabs {
-		if t.Host != nil {
-			continue
-		}
-		for _, p := range t.panes() {
-			shown[p.SID] = true
-		}
+	for p := range a.hostPanes(nil) {
+		shown[p.SID] = true
 	}
 	added := false
 	for _, in := range sortedInfos(byID) {
@@ -1022,9 +1058,11 @@ func (a *App) poll(win *mygo.Window, client *rex.Client) {
 		for _, in := range infos {
 			byID[in.ID] = in
 		}
-		win.Update(func() {
+		mygo.RunOnMain(func() {
 			if a.win == win {
-				a.apply(byID)
+				if a.applyPolled(nil, byID) {
+					win.Invalidate()
+				}
 			}
 		})
 	}
@@ -1038,92 +1076,79 @@ func (a *App) applyHost(host *desktopHost, byID map[string]rex.SessionInfo) {
 		a.focusedWin = a.win.IsFocused()
 	}
 	a.closeViewedPaneNotice()
-	for ti, t := range a.tabs {
-		if t.Host != host {
+	// Remote panes whose sessions ended close after the loop, as closing
+	// one changes the tree it walks.
+	var ended []*Pane
+	for p := range a.hostPanes(host) {
+		t := p.Tab
+		in, ok := byID[p.SID]
+		if !ok {
+			if host != nil && time.Since(p.info.Created) > 3*time.Second {
+				ended = append(ended, p)
+			}
 			continue
 		}
-		for _, p := range t.panes() {
-			in, ok := byID[p.SID]
-			if !ok {
-				continue
+		was := p.info
+		if a.hostHello(host).Version == 4 {
+			previous := was
+			// Reopening a window on the same App resets pane snapshots,
+			// but retained notices must not swallow the next legacy turn.
+			previous.Agent.CompletionRevision = max(previous.Agent.CompletionRevision, a.agentFinishedNotified[p.noticeKey()])
+			in.Agent = rex.LegacyCompletionState(previous, in)
+		}
+		p.info = in
+		if host != nil {
+			if p.remoteView != nil && p.stream == nil {
+				p.remoteView.geometry(in.Cols, in.Rows)
 			}
-			was := p.info
-			if a.hostHello(host).Version == 4 {
-				previous := was
-				// Reopening a window on the same App resets pane snapshots,
-				// but retained notices must not swallow the next legacy turn.
-				previous.Agent.CompletionRevision = max(previous.Agent.CompletionRevision, a.agentFinishedNotified[p.noticeKey()])
-				in.Agent = rex.LegacyCompletionState(previous, in)
+			a.followRemoteSizeOwner(p)
+		}
+		// A viewer uses its own TCP stream. The control connection can
+		// stay healthy after that stream drops, so restore it on the
+		// next successful poll without redialing or replacing the shell.
+		if host != nil && host.connected() && p.streamEnded && !in.Exited {
+			a.reattachDesktopPane(p, in)
+		}
+		a.followSizeLock(p, was)
+		a.updateAgentNotice(p, was.Agent)
+		// A program that ran a while and finished out of sight
+		// asks for attention.
+		if !was.Idle && was.Program != "" && in.Idle && was.Program != in.Program {
+			seen := t == a.tab() && t.Focus == p && a.focusedWin
+			if !seen {
+				p.attention = true
 			}
-			p.info = in
-			if host != nil {
-				if p.remoteView != nil && p.stream == nil {
-					p.remoteView.geometry(in.Cols, in.Rows)
-				}
-				a.followRemoteSizeOwner(p)
+			var completion uint64
+			if agents.Finished(in.Agent.State) {
+				completion = in.Agent.CompletionRevision
 			}
-			// A viewer uses its own TCP stream. The control connection can
-			// stay healthy after that stream drops, so restore it on the
-			// next successful poll without redialing or replacing the shell.
-			if host != nil && host.connected() && p.streamEnded && !in.Exited {
-				a.reattachDesktopPane(p, in)
-			}
-			a.followSizeLock(p, was)
-			a.updateAgentNotice(p, was.Agent)
-			// A program that ran a while and finished out of sight
-			// asks for attention.
-			if !was.Idle && was.Program != "" && in.Idle && was.Program != in.Program {
-				seen := ti == a.active && t.Focus == p && a.focusedWin
-				if !seen {
-					p.attention = true
-				}
-				var completion uint64
-				if in.Agent.State == agents.Completed || in.Agent.State == agents.Failed {
-					completion = in.Agent.CompletionRevision
-				}
-				if was.Agent.State == agents.Completed || was.Agent.State == agents.Failed {
-					if agent, ok := agents.Detect(was.Program, was.Args); ok && agent.ID == was.Agent.ID {
-						completion = max(completion, was.Agent.CompletionRevision)
-					}
-				}
-				integratedFinished := completion > 0 && a.agentFinishedNotified[p.noticeKey()] >= completion
-				if !seen && !integratedFinished && was.Agent.Source != rex.ProgramStatusSource && in.Agent.Source != rex.ProgramStatusSource && time.Since(was.LastInput) > 8*time.Second {
-					prog := programOf(was.Program)
-					a.showPaneNotice(p, "program", mygo.NotificationOptions{
-						Title: prog.Name + " finished",
-						Body:  "in " + shortDir(in.Dir),
-					})
+			if agents.Finished(was.Agent.State) {
+				if agent, ok := agents.Detect(was.Program, was.Args); ok && agent.ID == was.Agent.ID {
+					completion = max(completion, was.Agent.CompletionRevision)
 				}
 			}
-			if was.Dir != in.Dir {
-				a.changed()
+			integratedFinished := completion > 0 && a.agentFinishedNotified[p.noticeKey()] >= completion
+			if !seen && !integratedFinished && was.Agent.Source != rex.ProgramStatusSource && in.Agent.Source != rex.ProgramStatusSource && time.Since(was.LastInput) > 8*time.Second {
+				prog := programOf(was.Program)
+				a.showPaneNotice(p, "program", mygo.NotificationOptions{
+					Title: prog.Name + " finished",
+					Body:  "in " + shortDir(in.Dir),
+				})
 			}
+		}
+		if was.Dir != in.Dir {
+			a.changed()
+		}
+		if host != nil && in.Exited {
+			ended = append(ended, p)
 		}
 	}
-	if host != nil {
-		var ended []*Pane
-		for _, t := range a.tabs {
-			if t.Host == host {
-				for _, p := range t.panes() {
-					in, ok := byID[p.SID]
-					if (ok && in.Exited) || (!ok && time.Since(p.info.Created) > 3*time.Second) {
-						ended = append(ended, p)
-					}
-				}
-			}
-		}
-		for _, p := range ended {
-			a.closePane(p)
-		}
+	for _, p := range ended {
+		a.closePane(p)
 	}
-	for sid, close := range a.agentNotices {
-		if !noticeOnHost(sid, host) {
-			continue
-		}
-		if _, ok := byID[noticeSessionID(sid)]; !ok {
-			close()
-			delete(a.agentNotices, sid)
-			delete(a.agentNoticeKinds, sid)
+	for sid := range a.agentNotices {
+		if _, ok := byID[noticeSessionID(sid)]; !ok && noticeOnHost(sid, host) {
+			a.closeAgentNotice(sid)
 		}
 	}
 	if host == nil {

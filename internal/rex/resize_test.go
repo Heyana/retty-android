@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/egoist/mygo/ui"
 	"retty/internal/terminal"
@@ -77,14 +78,14 @@ func TestMarkedPromptResize(t *testing.T) {
 	s := &session{vt: vt, cols: 100, rows: 20, exited: true}
 	vt.Feed([]byte("history\r\n"))
 	prompt := []byte("\x1b]133;A\a\r\n\x1b[Aresize-prompt\x1b[90Gclock\r\n> pending-command\x1b]133;B\a")
-	s.prompt.feed(prompt)
+	s.programStatus.feed(prompt, time.Now())
 	vt.Feed(prompt)
 	for _, cols := range []int{80, 100, 80, 100, 80} {
 		s.resize(cols, 20)
 		// zsh redraws the prompt above its input row on SIGWINCH.
 		vt.Feed([]byte("\r\x1b[A"))
 		redraw := []byte("\x1b]133;A\aresize-prompt\r\n> pending-command\x1b]133;B\a")
-		s.prompt.feed(redraw)
+		s.programStatus.feed(redraw, time.Now())
 		vt.Feed(redraw)
 		if got := vt.Text(); got != "history\nresize-prompt\n> pending-command" {
 			t.Fatalf("at %d columns: %q", cols, got)
@@ -143,19 +144,19 @@ func TestResyncScreen(t *testing.T) {
 }
 
 func TestPromptTracker(t *testing.T) {
-	var p promptTracker
+	var p programStatusTracker
 	for _, part := range []string{"\x1b]13", "3;A;redraw=1\x1b", "\\prompt\x1b]133;B\a"} {
-		p.feed([]byte(part))
+		p.feed([]byte(part), time.Now())
 	}
-	if !p.active {
+	if !p.atPrompt {
 		t.Fatal("fragmented prompt was missed")
 	}
-	p.feed([]byte("\x1b]2;title\a"))
-	if !p.active {
+	p.feed([]byte("\x1b]2;title\a"), time.Now())
+	if !p.atPrompt {
 		t.Fatal("title changed prompt state")
 	}
-	p.feed([]byte("\x1b]133;C\a"))
-	if p.active {
+	p.feed([]byte("\x1b]133;C\a"), time.Now())
+	if p.atPrompt {
 		t.Fatal("command still marked as a prompt")
 	}
 }

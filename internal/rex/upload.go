@@ -110,7 +110,7 @@ type uploadSource struct {
 	info fs.FileInfo
 }
 
-func prepareFileUpload(ctx context.Context, sid string, paths []string) (FileUploadRequest, []uploadSource, error) {
+func prepareFileUpload(ctx context.Context, sid string, paths []string) (FileUploadRequest, []uploadSource, int64, error) {
 	req := FileUploadRequest{Op: "upload-files", SID: sid}
 	var sources []uploadSource
 	for _, source := range paths {
@@ -119,7 +119,7 @@ func prepareFileUpload(ctx context.Context, sid string, paths []string) (FileUpl
 		}
 		resolved, err := filepath.EvalSymlinks(source)
 		if err != nil {
-			return req, nil, fmt.Errorf("无法读取拖入的文件：%w", err)
+			return req, nil, 0, fmt.Errorf("无法读取拖入的文件：%w", err)
 		}
 		name := fmt.Sprintf("%03d/%s", len(req.Roots)+1, filepath.Base(filepath.Clean(source)))
 		req.Roots = append(req.Roots, name)
@@ -157,11 +157,11 @@ func prepareFileUpload(ctx context.Context, sid string, paths []string) (FileUpl
 			return nil
 		})
 		if err != nil {
-			return req, nil, err
+			return req, nil, 0, err
 		}
 	}
-	_, err := ValidateFileUpload(req)
-	return req, sources, err
+	total, err := ValidateFileUpload(req)
+	return req, sources, total, err
 }
 
 // UploadFiles streams files/folders to a private remote batch directory. Only a
@@ -177,11 +177,10 @@ func (c *Client) UploadFiles(ctx context.Context, sid string, paths []string, pr
 		case <-ctx.Done():
 		}
 	}()
-	req, sources, err := prepareFileUpload(ctx, sid, paths)
+	req, sources, total, err := prepareFileUpload(ctx, sid, paths)
 	if err != nil {
 		return nil, err
 	}
-	total, _ := ValidateFileUpload(req)
 	if progress != nil {
 		progress(0, total)
 	}

@@ -23,14 +23,9 @@ import (
 )
 
 func codexSocket() (string, error) {
-	home := os.Getenv("CODEX_HOME")
-	if home == "" {
-		var err error
-		home, err = os.UserHomeDir()
-		if err != nil {
-			return "", err
-		}
-		home = filepath.Join(home, ".codex")
+	home, err := agents.ConfigDir("codex")
+	if err != nil {
+		return "", err
 	}
 	return filepath.Join(home, "app-server-control", "app-server-control.sock"), nil
 }
@@ -115,7 +110,8 @@ func osPaneContextMissing() bool {
 }
 
 // RunCodexProxy relays frames unchanged. It observes only lifecycle metadata
-// for threads opened by this CLI, never approvals, prompts or model output.
+// for threads opened by this CLI and a bounded final reply excerpt. It never
+// retains approvals, prompts, reasoning or streaming deltas.
 func RunCodexProxy(dir string, parent int, socket string) error {
 	defer os.RemoveAll(dir)
 	ln, err := net.Listen("unix", filepath.Join(dir, "bridge.sock"))
@@ -220,6 +216,7 @@ type codexObserver struct {
 	active       bool
 	wait         string
 	finished     string // final turn status awaiting an idle thread confirmation
+	summary      string // bounded final answer for this turn only
 	emit         func(agents.HookInput)
 }
 
@@ -255,7 +252,14 @@ func (o *codexObserver) event(name, tool string) {
 	if o.thread.ID == "" {
 		return
 	}
-	o.emit(agents.HookInput{Event: name, SessionID: o.thread.ID, CWD: o.thread.CWD, TurnID: o.turn, Tool: tool, Source: agents.CodexLifecycleSource})
+	h := agents.HookInput{Event: name, SessionID: o.thread.ID, CWD: o.thread.CWD, TurnID: o.turn, Tool: tool, Source: agents.CodexLifecycleSource}
+	if name == "UserPromptSubmit" || name == "SessionStart" {
+		o.summary = ""
+	}
+	if name == "Stop" || name == "StopFailure" {
+		h.Summary = o.summary
+	}
+	o.emit(h)
 }
 
 func (o *codexObserver) message(raw []byte, client bool) {
@@ -311,9 +315,8 @@ func (o *codexObserver) message(raw []byte, client bool) {
 			o.emit(agents.HookInput{Event: "SessionStart", SessionID: request.ThreadID, CWD: cwd, Source: "resume"})
 		}
 		if !o.active || o.turn != turn {
-			o.turn, o.active, o.wait, o.finished = turn, true, "", ""
 			o.thread.Status = codexStatus{Type: "active"}
-			o.event("UserPromptSubmit", "")
+			o.beginTurn(turn)
 		}
 		return
 	}
@@ -324,6 +327,7 @@ func (o *codexObserver) message(raw []byte, client bool) {
 		}
 		if json.Unmarshal(message.Result, &result) == nil && result.Thread.ID != "" && result.Thread.Parent == "" {
 			o.thread, o.turn, o.active, o.wait = result.Thread, "", false, ""
+			o.summary = ""
 			o.finished = ""
 			h := agents.HookInput{Event: "SessionStart", SessionID: o.thread.ID, CWD: o.thread.CWD, Source: "startup"}
 			if method == "thread/resume" {
@@ -331,29 +335,37 @@ func (o *codexObserver) message(raw []byte, client bool) {
 			}
 			o.emit(h)
 			if result.Thread.Status.Type == "active" {
-				o.active = true
-				o.event("UserPromptSubmit", "")
+				o.beginTurn("")
 				o.waiting(result.Thread.Status)
 			}
 		}
 		return
 	}
 	var params struct {
-		ThreadID string      `json:"threadId"`
-		Turn     codexTurn   `json:"turn"`
-		Status   codexStatus `json:"status"`
+		ThreadID string `json:"threadId"`
+		TurnID   string `json:"turnId"`
+		Item     struct {
+			Type  string `json:"type"`
+			Text  string `json:"text"`
+			Phase string `json:"phase"`
+		} `json:"item"`
+		Turn   codexTurn   `json:"turn"`
+		Status codexStatus `json:"status"`
 	}
 	if json.Unmarshal(message.Params, &params) != nil || params.ThreadID == "" || params.ThreadID != o.thread.ID {
 		return
 	}
 	switch message.Method {
+	case "item/completed":
+		if o.active && params.TurnID != "" && params.TurnID == o.turn && params.Item.Type == "agentMessage" && (params.Item.Phase == "" || params.Item.Phase == "final_answer") {
+			o.summary = agents.SummaryText(params.Item.Text)
+		}
 	case "turn/started":
 		if params.Turn.ID == "" || (o.active && o.turn == params.Turn.ID) {
 			return
 		}
-		o.turn, o.active, o.wait, o.finished = params.Turn.ID, true, "", ""
 		o.thread.Status = codexStatus{Type: "active"}
-		o.event("UserPromptSubmit", "")
+		o.beginTurn(params.Turn.ID)
 	case "turn/completed":
 		if params.Turn.ID == "" || (o.turn != "" && params.Turn.ID != o.turn) || !o.active {
 			return
@@ -368,12 +380,18 @@ func (o *codexObserver) message(raw []byte, client bool) {
 		o.thread.Status = params.Status
 		if params.Status.Type == "active" && !o.active {
 			// Continuations can become active before turn/started arrives.
-			o.turn, o.active, o.wait, o.finished = "", true, "", ""
-			o.event("UserPromptSubmit", "")
+			o.beginTurn("")
 		}
 		o.waiting(params.Status)
 		o.finishIfIdle()
 	}
+}
+
+// beginTurn starts tracking a new turn, possibly not yet identified, and
+// reports it as the start of new work.
+func (o *codexObserver) beginTurn(turn string) {
+	o.turn, o.active, o.wait, o.finished = turn, true, "", ""
+	o.event("UserPromptSubmit", "")
 }
 
 func (o *codexObserver) finishIfIdle() {

@@ -26,7 +26,7 @@ func paintCompactFocus(p *ui.Painter, content, pane ui.Rect, color ui.Color) {
 
 // compactTitleBar uses a flat tab strip across the space beside the native
 // window controls. Menus and keyboard shortcuts remain available.
-func (a *App) compactTitleBar(c *ui.Context, k *colors, bar ui.TitleBar) {
+func (a *App) compactTitleBar(c *ui.Context, k *colors, bar ui.TitleBar, inbox int) {
 	left := float32(0)
 	if bar.Left > 0 {
 		left = bar.Left + 8
@@ -34,6 +34,7 @@ func (a *App) compactTitleBar(c *ui.Context, k *colors, bar ui.TitleBar) {
 	ui.Row(c).Height(compactTitleH).Padding(0, bar.Right, 0, left).Gap(0).
 		Background(k.track).AlignItems(ui.Center).DragWindow().Children(func() {
 		a.tabStrip(c, k)
+		a.inboxButton(c, k, inbox)
 		b := compactTitleButton(c.Key("compact-new-tab"), k, "plus", "New Tab", false).Tooltip("New Tab  ⌘T")
 		if b.Clicked() {
 			a.newTab(a.currentDir())
@@ -89,13 +90,7 @@ func (a *App) compactTabLabel(c *ui.Context, k *colors, i int, t *Tab, name, det
 	} else if a.tabBusy(c, t) {
 		ui.Box(c).Size(6, 6).Radius(3).Background(k.busy).Shrink(0)
 	}
-	shortcut := i + 1
-	if i == len(a.tabs)-1 && i >= 8 {
-		shortcut = 9 // Cmd-9 always selects the last tab.
-	} else if i >= 8 {
-		shortcut = 0
-	}
-	if shortcut > 0 {
+	if shortcut := tabShortcut(i, len(a.tabs)); shortcut > 0 {
 		ui.Text(c, fmt.Sprintf("⌘%d", shortcut)).FontSize(10).TextColor(k.textFaint).Shrink(0)
 	}
 	if hovered && len(a.tabs) > 1 {

@@ -26,6 +26,7 @@ type AgentState struct {
 	Label              string    `json:"label,omitempty"`
 	Message            string    `json:"message,omitempty"`
 	Progress           *int      `json:"progress,omitempty"`
+	Summary            string    `json:"summary,omitempty"`
 }
 
 type AgentEvent struct {
@@ -51,17 +52,20 @@ type agentTracker struct {
 	turnID  string
 }
 
-func (s *session) reportAgent(token string, event *AgentEvent) error {
+// reportAgent applies an event to the pane. It returns the normalized hook
+// and whether the event became the pane's current state, which is all the
+// recovery record needs.
+func (s *session) reportAgent(token string, event *AgentEvent) (agents.HookInput, bool, error) {
 	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.agentToken)) != 1 {
-		return errors.New("invalid agent token")
+		return agents.HookInput{}, false, errors.New("invalid agent token")
 	}
 	if err := validateAgentEvent(event); err != nil {
-		return err
+		return agents.HookInput{}, false, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.exited {
-		return errors.New("session exited")
+		return agents.HookInput{}, false, errors.New("session exited")
 	}
 	// Revisions share a monotonic space when a session switches between
 	// generic terminal status and an agent integration.
@@ -81,15 +85,14 @@ func (s *session) reportAgent(token string, event *AgentEvent) error {
 			s.programStatus.lastReport = time.Time{}
 		}
 	}
-	return nil
+	return h, accepted, nil
 }
 
 func validateAgentEvent(event *AgentEvent) error {
 	if event == nil {
 		return errors.New("missing agent event")
 	}
-	b, _ := json.Marshal(event.Input)
-	if _, valid := agents.ParseHook(event.Agent, b); !valid || event.At.IsZero() || event.At.After(time.Now().Add(time.Minute)) {
+	if !agents.ValidHook(event.Agent, event.Input) || event.At.IsZero() || event.At.After(time.Now().Add(time.Minute)) {
 		return errors.New("invalid agent event")
 	}
 	return nil
@@ -204,12 +207,19 @@ func (t *agentTracker) apply(e AgentEvent) {
 		revision++
 	}
 	completion := t.state.CompletionRevision
-	finished := state == agents.Completed || state == agents.Failed
-	wasFinished := t.state.State == agents.Completed || t.state.State == agents.Failed
+	finished := agents.Finished(state)
+	wasFinished := agents.Finished(t.state.State)
 	if finished && (!wasFinished || t.state.SessionID != h.SessionID || (h.TurnID != "" && h.TurnID != previousTurn)) {
 		completion++
 	}
-	t.state = AgentState{ID: e.Agent, SessionID: h.SessionID, State: state, Reason: reason, Updated: e.At, WaitRevision: revision, CompletionRevision: completion}
+	summary := ""
+	if finished {
+		summary = agents.SummaryText(h.Summary)
+		if summary == "" && wasFinished && completion == t.state.CompletionRevision && t.state.SessionID == h.SessionID {
+			summary = t.state.Summary
+		}
+	}
+	t.state = AgentState{ID: e.Agent, SessionID: h.SessionID, State: state, Reason: reason, Updated: e.At, WaitRevision: revision, CompletionRevision: completion, Summary: summary}
 	if state == agents.Ended {
 		t.state.State = ""
 	}
@@ -257,13 +267,8 @@ func RunAgentHook(agent string, stdin io.Reader) {
 }
 
 func agentConfigDir(agent string) *string {
-	key := ""
-	switch agent {
-	case "codex":
-		key = "CODEX_HOME"
-	case "claude":
-		key = "CLAUDE_CONFIG_DIR"
-	default:
+	key := agents.ConfigEnv(agent)
+	if key == "" {
 		return nil
 	}
 	value := os.Getenv(key)

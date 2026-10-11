@@ -1,6 +1,7 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -9,7 +10,6 @@ import (
 	"retty/internal/rex"
 	"sort"
 	"strings"
-	"unicode/utf8"
 )
 
 type mobileSessionPreference struct {
@@ -17,21 +17,23 @@ type mobileSessionPreference struct {
 	Pinned bool   `json:"pinned,omitempty"`
 }
 
-func (m *mobileApp) desktopKey() string {
-	if m.hello.Host.ID != "" {
-		return m.hello.Host.ID
-	}
-	return m.link
-}
-func (m *mobileApp) preferenceKey(sid string) string { return m.desktopKey() + "\x00" + sid }
+func (m *mobileApp) desktopKey() string { return cmp.Or(m.hello.Host.ID, m.link) }
+
+// key identifies a desktop in recent sessions and preferences.
+func (d desktopRecent) key() string { return cmp.Or(d.ID, d.Link) }
+
+// sessionKey identifies a session across desktops.
+func sessionKey(desktop, sid string) string { return desktop + "\x00" + sid }
+
+func (m *mobileApp) preferenceKey(sid string) string { return sessionKey(m.desktopKey(), sid) }
 func (m *mobileApp) preference(sid string) mobileSessionPreference {
 	return m.sessionPreferences[m.preferenceKey(sid)]
 }
-func (m *mobileApp) sessionTitle(s rex.SessionInfo) string {
-	if name := m.preference(s.ID).Name; name != "" {
-		return name
-	}
-	return mobileSessionTitle(s)
+func (m *mobileApp) sessionTitle(s rex.SessionInfo) string { return m.titleOn(m.desktopKey(), s) }
+
+// titleOn names a session of the given desktop, preferring the user's name.
+func (m *mobileApp) titleOn(desktop string, s rex.SessionInfo) string {
+	return cmp.Or(m.sessionPreferences[sessionKey(desktop, s.ID)].Name, mobileSessionTitle(s))
 }
 
 func (m *mobileApp) sessionDirectory(s rex.SessionInfo) string {
@@ -99,7 +101,7 @@ func (m *mobileApp) orderedSessions() []rex.SessionInfo {
 }
 
 func (m *mobileApp) sessionList(c *ui.Context) {
-	recovering := m.needsRecovery() || m.connectionIssue != nil
+	recovering := m.degraded()
 	mobileListGroup(c).Children(func() {
 		if len(m.sessions) == 0 {
 			mobileListEmpty(c, "轻点右上角 ＋ 新建终端")
@@ -168,17 +170,22 @@ func (m *mobileApp) sessionList(c *ui.Context) {
 	})
 }
 
-func (m *mobileApp) setSessionPreference(sid, name string, pinned bool) {
-	name = strings.TrimSpace(name)
-	name = strings.Map(func(r rune) rune {
+// cleanName keeps a user-entered name to one short line of text.
+func cleanName(name string) string {
+	name = strings.TrimSpace(strings.Map(func(r rune) rune {
 		if r < 32 || r == 127 {
 			return -1
 		}
 		return r
-	}, name)
-	if utf8.RuneCountInString(name) > 80 {
-		name = string([]rune(name)[:80])
+	}, name))
+	if runes := []rune(name); len(runes) > 80 {
+		name = string(runes[:80])
 	}
+	return name
+}
+
+func (m *mobileApp) setSessionPreference(sid, name string, pinned bool) {
+	name = cleanName(name)
 	if m.sessionPreferences == nil {
 		m.sessionPreferences = map[string]mobileSessionPreference{}
 	}
@@ -211,21 +218,14 @@ func (m *mobileApp) loadSessionPreferences() {
 	}
 }
 func (m *mobileApp) persistSessionPreferences() {
-	if m.store == nil || m.storage == nil {
-		return
-	}
 	saved, _ := json.Marshal(m.sessionPreferences)
 	epoch := m.preferenceEpoch
-	m.storage <- func() {
-		if err := m.store.Set("session-preferences", saved); err != nil {
-			mygo.RunOnMain(func() {
-				if m.preferenceEpoch == epoch {
-					m.error = "无法保存会话设置，请重试"
-					m.invalidate()
-				}
-			})
+	m.save("session-preferences", saved, func() {
+		if m.preferenceEpoch == epoch {
+			m.error = "无法保存会话设置，请重试"
+			m.invalidate()
 		}
-	}
+	})
 }
 
 func (m *mobileApp) applyLoadedSessionPreferences(preferences map[string]mobileSessionPreference, epoch int) {

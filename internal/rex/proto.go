@@ -53,6 +53,10 @@ type Request struct {
 	Owner string `json:"owner,omitempty"`
 	// Retry explicitly retries a previously failed Agent restore.
 	Retry bool `json:"retry,omitempty"`
+	// Notice identifies the exact lifecycle event acknowledged by a viewer.
+	Notice string `json:"notice,omitempty"`
+	// ETag, on "list", names the list the client already has.
+	ETag string `json:"etag,omitempty"`
 }
 
 // Response answers the Request with the same ID.
@@ -60,6 +64,12 @@ type Response struct {
 	ID    int64           `json:"id"`
 	Error string          `json:"error,omitempty"`
 	Data  json.RawMessage `json:"data,omitempty"`
+	// ETag names a "list" answer. When it equals the request's, Data is
+	// left out: remote clients poll every few seconds over a relay, and
+	// sessions are mostly unchanged. Older servers ignore the request's
+	// ETag and always send the list, and older clients never send one, so
+	// this needs no new protocol version, as with size leases.
+	ETag string `json:"etag,omitempty"`
 }
 
 // CreateOptions start a session.
@@ -107,6 +117,7 @@ type SessionInfo struct {
 	// Agent contains their effective status for existing UI and push clients.
 	ProgramStatuses []ProgramStatus `json:"programStatuses,omitempty"`
 	Resumed         bool            `json:"resumed,omitempty"`
+	AttentionSeen   string          `json:"attentionSeen,omitempty"`
 }
 
 // RestoreResult is empty for a pane without a recoverable Agent. Errors retain
@@ -129,6 +140,7 @@ type Hello struct {
 	Exe           string    `json:"exe,omitempty"`
 	ExeTime       time.Time `json:"exeTime,omitzero"`
 	AgentRecovery bool      `json:"agentRecovery,omitempty"`
+	Attention     bool      `json:"attention,omitempty"`
 }
 
 // HostInfo describes the machine the server runs on.

@@ -110,7 +110,7 @@ func TestMobileResumeReusesHealthyControlOrRedialsExpiredControl(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			next, hello, sessions, err := resumeMobileConnection(ctx, client, &rex.DeviceInfo{Name: "mini"})
+			next, hello, sessions, err := remote.ResumeConnection(ctx, client, &rex.DeviceInfo{Name: "mini"})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -153,7 +153,7 @@ func TestMobileResumeRedialDeadlineAndIncompatibleDesktop(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 			defer cancel()
-			next, _, _, err := resumeMobileConnection(ctx, client, nil)
+			next, _, _, err := remote.ResumeConnection(ctx, client, nil)
 			if err == nil || next != nil {
 				t.Fatal("failed resume retained an invalid control channel")
 			}
@@ -306,7 +306,7 @@ func TestMobileRetainedConnectionCheckUsesOnlyListAndHonorsDeadline(t *testing.T
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	got, err := checkMobileConnection(ctx, client, &rex.DeviceInfo{Name: "iPhone"})
+	got, err := remote.CheckConnection(ctx, client, &rex.DeviceInfo{Name: "iPhone"})
 	if err != nil || len(got) != 1 || got[0].ID != "alive" {
 		t.Fatal("retained control connection was not usable", got, err)
 	}
@@ -324,7 +324,7 @@ func TestMobileRetainedConnectionCheckUsesOnlyListAndHonorsDeadline(t *testing.T
 	ctx, cancel = context.WithTimeout(context.Background(), 30*time.Millisecond)
 	defer cancel()
 	started := time.Now()
-	_, err = checkMobileConnection(ctx, client, nil)
+	_, err = remote.CheckConnection(ctx, client, nil)
 	if err == nil || time.Since(started) > time.Second || !errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatal("stale connection check ignored its deadline", err)
 	}

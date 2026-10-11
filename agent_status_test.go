@@ -167,7 +167,7 @@ func TestBackgroundAgentCompletionNotifications(t *testing.T) {
 		t.Fatal("failure not notified")
 	}
 	a.setAgentNotifications(false)
-	if a.agentNotices[p.SID] == nil {
+	if a.agentNotices[p.SID].close == nil {
 		t.Fatal("waiting preference removed completion notice")
 	}
 	a.setAgentCompletionNotifications(false)
@@ -191,7 +191,7 @@ func TestBackgroundAgentCompletionNotifications(t *testing.T) {
 	info.Program = "sh"
 	info.Agent.State = ""
 	a.apply(map[string]rex.SessionInfo{p.SID: info})
-	if a.agentNotices[p.SID] == nil {
+	if a.agentNotices[p.SID].close == nil {
 		t.Fatal("completion notice removed when agent exited")
 	}
 	if closed == 0 {
@@ -285,7 +285,7 @@ func TestActivePaneSuppressesAllDesktopNoticePaths(t *testing.T) {
 	}
 	tab.setFocus(other)
 	a.closeViewedPaneNotice()
-	if closed != 1 || a.agentNotices[other.SID] != nil {
+	if closed != 1 || a.agentNotices[other.SID].close != nil {
 		t.Fatal("returning to the notified split left its banner pending")
 	}
 	tab.setFocus(p)

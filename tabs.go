@@ -1,11 +1,9 @@
 package main
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"github.com/egoist/mygo/ui"
 )
@@ -40,6 +38,16 @@ func (a *App) tabItem(c *ui.Context, k *colors, i int, t *Tab) {
 	}
 	e.Background(bg).BorderWidth(0, 1, bottom, 0).BorderColor(k.headerBorder)
 	e.Transition(ui.ElementTransition{Colors: true, Position: true, Duration: 160 * time.Millisecond})
+	if e.Clicked() && !active {
+		a.selectTab(i)
+	}
+	a.bindTabItem(k, e, i, t)
+	hovered := e.Hovered()
+	e.Children(func() { a.compactTabLabel(c, k, i, t, name, detail, hovered) })
+}
+
+// Both layouts use the same Tab objects and actions.
+func (a *App) bindTabItem(k *colors, e ui.Element, i int, t *Tab) {
 	e.Drag(t)
 	if dragged, ok := ui.Drop[*Tab](e); ok && dragged != t {
 		a.moveTab(dragged, i)
@@ -50,16 +58,11 @@ func (a *App) tabItem(c *ui.Context, k *colors, i int, t *Tab) {
 	if e.Dragging() {
 		e.Opacity(0.4)
 	}
-	if e.Clicked() && !active {
-		a.selectTab(i)
-	}
 	if e.DoubleClicked() {
 		a.selectTab(i)
 		a.startRename()
 	}
 	e.ContextMenu(func(m *ui.Menu) { a.tabMenu(m, t) })
-	hovered := e.Hovered()
-	e.Children(func() { a.compactTabLabel(c, k, i, t, name, detail, hovered) })
 }
 
 // renameField edits the name of a tab in place: Enter or moving the focus
@@ -97,12 +100,7 @@ func (t *Tab) attention() bool {
 }
 
 func (a *App) tabBusy(c *ui.Context, t *Tab) bool {
-	for _, p := range t.panes() {
-		if a.statusOf(c, p) == statusRunning {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(t.panes(), func(p *Pane) bool { return paneRunning(c, p) })
 }
 
 func (a *App) moveTab(t *Tab, to int) {
@@ -155,73 +153,4 @@ func (a *App) tabMenu(m *ui.Menu, t *Tab) {
 
 func paneProgram(p *Pane) program {
 	return programOf(sessionProgramName(p.info))
-}
-
-// fadeText draws spans on a line, fading the end out when they do not
-// fit, rather than cutting them with an ellipsis.
-func fadeText(p *ui.Painter, r ui.Rect, spans []ui.Span) {
-	key := fmt.Sprintf("%.0f|%v", r.W, spans)
-	f, ok := fades[key]
-	if !ok {
-		f = layoutFade(p, r.W, spans)
-		if len(fades) > 512 {
-			clear(fades)
-		}
-		fades[key] = f
-	}
-	p.RichText(r.X, r.Y+(r.H-f.h)/2, 0, f.spans...)
-}
-
-// fades caches the spans of faded texts, by their width and spans.
-var fades = map[string]fadeLayout{}
-
-type fadeLayout struct {
-	spans []ui.Span
-	h     float32
-}
-
-func layoutFade(p *ui.Painter, width float32, spans []ui.Span) fadeLayout {
-	w, h := p.MeasureText(0, spans...)
-	if w <= width {
-		return fadeLayout{spans, h}
-	}
-	r := ui.Rect{W: width}
-	const fade = 30
-	// Characters are measured one by one; those past the start of the
-	// fade lose their opacity as they near the edge.
-	var out []ui.Span
-	x := float32(0)
-	for _, s := range spans {
-		start := 0
-		for i := 0; i < len(s.Text); {
-			_, n := utf8.DecodeRuneInString(s.Text[i:])
-			ch := s
-			ch.Text = s.Text[i : i+n]
-			cw, _ := p.MeasureText(0, ch)
-			if x+cw > r.W-fade {
-				if start < i {
-					head := s
-					head.Text = s.Text[start:i]
-					out = append(out, head)
-				}
-				f := 1 - (x+cw/2-(r.W-fade))/fade
-				// A color of no alpha is the text's own color: stop
-				// before.
-				ch.Color = ch.Color.Alpha(max(f, 0) * max(f, 0))
-				if ch.Color.A < 4 {
-					return fadeLayout{out, h}
-				}
-				out = append(out, ch)
-				start = i + n
-			}
-			x += cw
-			i += n
-		}
-		if start < len(s.Text) {
-			tail := s
-			tail.Text = s.Text[start:]
-			out = append(out, tail)
-		}
-	}
-	return fadeLayout{out, h}
 }

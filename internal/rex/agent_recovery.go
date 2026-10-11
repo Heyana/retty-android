@@ -14,11 +14,13 @@ import (
 	"time"
 
 	"retty/internal/agents"
+	"retty/internal/atomicfile"
 )
 
 // agentResume contains only lifecycle/launch metadata. Never save prompts,
 // transcripts, arbitrary shell commands, credentials or temporary relay sockets.
 type agentResume struct {
+	Revision  uint64   `json:"revision,omitempty"`
 	Agent     string   `json:"agent"`
 	SessionID string   `json:"sessionID"`
 	Dir       string   `json:"dir"`
@@ -31,14 +33,11 @@ type agentResume struct {
 
 func recoveryEnv(kv string) bool {
 	k, _, _ := strings.Cut(kv, "=")
-	return k == "CODEX_HOME" || k == "CLAUDE_CONFIG_DIR"
+	return k == agents.ConfigEnv("codex") || k == agents.ConfigEnv("claude")
 }
 
 func resumeConfigEnv(agent string, config *string, inherited []string) []string {
-	key := "CLAUDE_CONFIG_DIR"
-	if agent == "codex" {
-		key = "CODEX_HOME"
-	}
+	key := agents.ConfigEnv(agent)
 	if config != nil {
 		return []string{key + "=" + *config}
 	}
@@ -202,25 +201,11 @@ func (s *Server) saveRecovery() error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(s.recoveryPath), ".agent-resume-*")
-	if err != nil {
+	if err := atomicfile.Write(s.recoveryPath, b); err != nil {
 		return err
 	}
-	defer os.Remove(f.Name())
-	_, err = f.Write(b)
-	if err == nil {
-		err = f.Sync()
-	}
-	closeErr := f.Close()
-	if err != nil {
-		return err
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	if err := os.Rename(f.Name(), s.recoveryPath); err != nil {
-		return err
-	}
+	// The record must survive a crash right after a rename that is not yet
+	// on disk, so sync the directory too.
 	if dir, err := os.Open(filepath.Dir(s.recoveryPath)); err == nil {
 		defer dir.Close()
 		return dir.Sync()
@@ -236,43 +221,32 @@ func (s *Server) forgetRecovery(sid string) error {
 	return s.saveRecovery()
 }
 
-func (s *Server) recordAgent(ss *session, event *AgentEvent) error {
-	if event == nil {
-		return nil
-	}
-	h := agents.NormalizeHook(event.Agent, event.Input)
+// recordAgent updates the recovery record from an accepted, normalized hook.
+func (s *Server) recordAgent(ss *session, agent string, h agents.HookInput) error {
 	ss.mu.Lock()
-	accepted := ss.agent.lastAt.Equal(event.At) && ss.agent.state.ID == event.Agent && ss.agent.state.SessionID == h.SessionID
+	revision := max(ss.agent.state.WaitRevision, ss.agent.state.CompletionRevision, ss.programStatus.serial)
 	ss.mu.Unlock()
-	if !accepted {
-		return nil
-	}
-	if h.Event == "SessionEnd" {
-		return s.forgetRecovery(ss.id)
-	}
-	if event.Agent != "codex" && event.Agent != "claude" {
+	if h.Event == "SessionEnd" || agent != "codex" && agent != "claude" {
 		return s.forgetRecovery(ss.id)
 	}
 	if ss.p == nil || ss.p.cmd.Process == nil {
 		return nil
 	}
-	fg := ss.p.foreground()
-	if fg <= 0 {
-		fg = ss.p.cmd.Process.Pid
-	}
+	fg := ss.p.foregroundOrShell()
 	p := inspect(fg)
-	options, supported := resumeOptions(event.Agent, p.args)
+	options, supported := resumeOptions(agent, p.args)
 	if !supported {
 		return s.forgetRecovery(ss.id)
 	}
-	r := agentResume{Agent: event.Agent, SessionID: h.SessionID, Dir: h.CWD, Options: options, Env: resumeConfigEnv(event.Agent, h.ConfigDir, ss.p.cmd.Env), seen: time.Now()}
+	r := agentResume{Revision: revision, Agent: agent, SessionID: h.SessionID, Dir: h.CWD, Options: options, Env: resumeConfigEnv(agent, h.ConfigDir, ss.p.cmd.Env), seen: time.Now()}
 	if r.Dir == "" {
 		r.Dir = p.dir
 	}
-	if a, ok := agents.Detect(p.programName(), p.args); ok && a.ID == event.Agent {
+	if a, ok := agents.Detect(p.programName(), p.args); ok && a.ID == agent {
 		r.pid = fg
 	}
 	if previous, ok := s.recovery[ss.id]; ok && previous.Agent == r.Agent && previous.SessionID == r.SessionID {
+		r.Revision = max(r.Revision, previous.Revision)
 		// Metadata events may arrive while a tool owns the foreground group.
 		if r.pid == 0 {
 			r.pid, r.Options = previous.pid, previous.Options
@@ -340,7 +314,14 @@ func (s *Server) restoreAgent(req Request) (RestoreResult, error) {
 	}
 	r.Error, r.pid, r.seen = "", ss.p.cmd.Process.Pid, time.Now()
 	ss.mu.Lock()
-	ss.agent.state = AgentState{ID: r.Agent, SessionID: r.SessionID, State: agents.Ready, Updated: time.Now()}
+	// Recovery keeps the original pane/conversation IDs. Continue its event
+	// sequence so persisted push and Inbox receipts cannot hide the next turn.
+	// Older recovery files have no sequence; use a fresh floor for migration.
+	if r.Revision == 0 {
+		r.Revision = uint64(time.Now().UnixMilli())
+	}
+	ss.agent.state = AgentState{ID: r.Agent, SessionID: r.SessionID, State: agents.Ready, Updated: time.Now(), WaitRevision: r.Revision, CompletionRevision: r.Revision}
+	ss.programStatus.serial = r.Revision
 	ss.mu.Unlock()
 	s.recovery[req.SID] = r
 	s.mu.Lock()
@@ -411,25 +392,21 @@ func (s *Server) checkRecovery() {
 			s.updateRecoveryExit(ss)
 			continue
 		}
-		if r.pid == 0 {
-			fg := ss.p.foreground()
-			p := inspect(fg)
-			if a, ok := agents.Detect(p.programName(), p.args); ok && a.ID == r.Agent {
-				r.pid = fg
+		// Until the Agent is found in the foreground, look for it there.
+		pid := r.pid
+		if pid == 0 {
+			pid = ss.p.foreground()
+		}
+		p := inspect(pid)
+		if a, ok := agents.Detect(p.programName(), p.args); ok && a.ID == r.Agent {
+			if r.pid == 0 {
+				r.pid = pid
 				s.recovery[sid] = r
-				continue
 			}
-			if time.Since(r.seen) < 5*time.Second {
-				continue
-			}
-		} else {
-			p := inspect(r.pid)
-			if a, ok := agents.Detect(p.programName(), p.args); ok && a.ID == r.Agent {
-				continue
-			}
-			if time.Since(r.seen) < 5*time.Second {
-				continue
-			}
+			continue
+		}
+		if time.Since(r.seen) < 5*time.Second {
+			continue
 		}
 		// An Agent killed from outside cannot emit SessionEnd. A stopped
 		// or backgrounded Agent remains recorded while its process lives.

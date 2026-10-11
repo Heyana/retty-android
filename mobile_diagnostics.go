@@ -35,16 +35,8 @@ func (m *mobileApp) restoreConnectionDiagnostics(saved []remote.DiagnosticReport
 }
 
 func (m *mobileApp) persistConnectionDiagnostics() {
-	if m.store != nil && m.storage != nil {
-		data, err := json.Marshal(m.connectionDiagnostics)
-		if err == nil {
-			m.storage <- func() {
-				if err := m.store.Set("connection-diagnostics-v1", data); err != nil {
-					log.Print("Retty: 无法保存连接诊断")
-				}
-			}
-		}
-	}
+	data, _ := json.Marshal(m.connectionDiagnostics)
+	m.save("connection-diagnostics-v1", data, func() { log.Print("Retty: 无法保存连接诊断") })
 }
 
 func (m *mobileApp) connectionDiagnosticsAction(c *ui.Context) {

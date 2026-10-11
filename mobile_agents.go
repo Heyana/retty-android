@@ -33,7 +33,7 @@ func (m *mobileApp) updateSessions(sessions []rex.SessionInfo, initial bool) {
 		next[key] = session
 		state := sessionAgentState(session)
 		// A one-shot command may finish and return to its shell between polls.
-		if state.State == "" && (session.Agent.State == agents.Completed || session.Agent.State == agents.Failed) {
+		if state.State == "" && agents.Finished(session.Agent.State) {
 			state = session.Agent
 		}
 		if rex.AgentNoticeState(session) {
@@ -47,7 +47,7 @@ func (m *mobileApp) updateSessions(sessions []rex.SessionInfo, initial bool) {
 		}
 		same := (state.ID == previous.Agent.ID || state.Source == rex.ProgramStatusSource) && state.SessionID == previous.Agent.SessionID && state.Source == previous.Agent.Source
 		waiting := state.State == agents.Waiting && (!same || state.WaitRevision > previous.Agent.WaitRevision || previous.Agent.State != agents.Waiting)
-		finished := (state.State == agents.Completed || state.State == agents.Failed) && (!same || state.CompletionRevision > previous.Agent.CompletionRevision)
+		finished := agents.Finished(state.State) && (!same || state.CompletionRevision > previous.Agent.CompletionRevision)
 		if !waiting && !finished {
 			continue
 		}
@@ -63,7 +63,7 @@ func (m *mobileApp) updateSessions(sessions []rex.SessionInfo, initial bool) {
 			continue
 		}
 		notice := mobileAgentNotice{ID: id, Desktop: m.desktopKey(), Session: session.ID, Title: programOf(state.ID).Name + " · " + agentStateLabel(state), Body: m.sessionTitle(session)}
-		if state.Source == rex.ProgramStatusSource {
+		if state.Source == rex.ProgramStatusSource || state.Summary != "" {
 			notice.Body = rex.AgentNoticeBody("", session)
 		}
 		if m.agentNotify != nil {
@@ -74,6 +74,14 @@ func (m *mobileApp) updateSessions(sessions []rex.SessionInfo, initial bool) {
 	m.syncPushRegistration()
 	m.agentPrevious = next
 	m.sessions = sessions
+	m.cacheInbox()
+	if m.inboxTerminalVisible() {
+		for _, s := range sessions {
+			if s.ID == m.selected.ID {
+				m.readInbox(s)
+			}
+		}
+	}
 	m.refreshRecentSessions()
 }
 

@@ -97,12 +97,9 @@ type Options struct {
 	OnPasteImage func(context.Context, string, []byte) error
 }
 
-func Start(ctx context.Context, socket string, options ...Options) (*Bridge, error) {
+func Start(ctx context.Context, socket string, options Options) (*Bridge, error) {
 	b := &Bridge{server: &tailcat.Server{Logf: quiet}, conns: make(map[net.Conn]bool), devices: make(map[net.Conn]ConnectedDevice)}
-	var stateDir string
-	if len(options) > 0 {
-		stateDir = options[0].StateDir
-	}
+	stateDir := options.StateDir
 	if stateDir != "" {
 		identity, lock, err := loadIdentity(ctx, stateDir)
 		if err != nil {
@@ -117,12 +114,7 @@ func Start(ctx context.Context, socket string, options ...Options) (*Bridge, err
 	if stateDir != "" {
 		b.uploadDir = filepath.Join(stateDir, "uploads")
 	}
-	if len(options) > 0 {
-		b.onDevice = options[0].OnDevice
-		b.onNotice = options[0].OnNotice
-		b.onPeer = options[0].OnPeer
-		b.onImage = options[0].OnPasteImage
-	}
+	b.onDevice, b.onNotice, b.onPeer, b.onImage = options.OnDevice, options.OnNotice, options.OnPeer, options.OnPasteImage
 	ln, err := b.server.Listen(ctx, "tcp", fmt.Sprintf(":%d", Port))
 	if err != nil {
 		b.imageCancel()
@@ -150,10 +142,17 @@ func (b *Bridge) accept(socket string) {
 			return
 		}
 		b.mu.Lock()
-		if b.closed || b.disconnected[deviceConnectionID(conn)] {
+		if b.closed {
 			b.mu.Unlock()
 			conn.Close()
 			return
+		}
+		// A disconnected device may keep redialing; refusing it must not
+		// stop the listener from accepting other devices.
+		if b.disconnected[deviceConnectionID(conn)] {
+			b.mu.Unlock()
+			conn.Close()
+			continue
 		}
 		b.conns[conn] = true
 		b.mu.Unlock()
@@ -194,14 +193,39 @@ func (b *Bridge) Close() {
 // Connect owns a Tailcat client until closeTunnel is called. Every Rex stream
 // shares its tunnel; a separate TCP connection carries each terminal's bytes.
 func Connect(ctx context.Context, raw string) (*rex.Client, func(), error) {
-	return connect(ctx, raw, true, nil)
+	return connect(ctx, raw, true, nil, nil)
 }
 
-func ConnectWithDiagnostics(ctx context.Context, raw string, diagnostics *Diagnostics) (*rex.Client, func(), error) {
-	return connect(ctx, raw, true, diagnostics)
+func connect(ctx context.Context, raw string, reportFailure bool, diagnostics *Diagnostics, quality *Quality) (*rex.Client, func(), error) {
+	t, client, err := dialTunnel(ctx, raw, reportFailure, diagnostics)
+	if err != nil {
+		return nil, nil, err
+	}
+	unbind, stopDiscovery := func() {}, func() {}
+	if quality != nil {
+		// Discovery belongs to the tunnel, not the short-lived dialing context
+		// or a terminal attachment. Network changes can make a relayed path direct.
+		lifetime, cancel := context.WithCancel(context.Background())
+		unbind = quality.bindProbe(serializedPathProbe(lifetime, func(ctx context.Context) (PathSample, error) {
+			p, err := t.client.DiscoPing(ctx)
+			if err != nil {
+				return PathSample{}, err
+			}
+			return PathSample{At: time.Now(), Direct: p.Endpoint != "", Latency: time.Duration(p.LatencySeconds * float64(time.Second))}, nil
+		}))
+		go discoverPath(lifetime, quality, 2*time.Second, 30*time.Second)
+		stopDiscovery = cancel
+	}
+	return client, func() {
+		stopDiscovery()
+		unbind()
+		t.close()
+	}, nil
 }
 
-func connect(ctx context.Context, raw string, reportFailure bool, diagnostics *Diagnostics, quality ...*Quality) (*rex.Client, func(), error) {
+// dialTunnel opens a control connection, on a probe's parked tunnel when one
+// is still up, else on a new tunnel.
+func dialTunnel(ctx context.Context, raw string, reportFailure bool, diagnostics *Diagnostics) (*tunnel, *rex.Client, error) {
 	var addr tailcat.Addr
 	err := diagnostics.Measure(StageLink, func() error {
 		var err error
@@ -215,92 +239,75 @@ func connect(ctx context.Context, raw string, reportFailure bool, diagnostics *D
 		return nil, nil, err
 	}
 	diagnostics.target(addr)
+	logf := tunnelLog(diagnostics)
+	if t := takeTunnel(addr); t != nil {
+		t.setLog(logf)
+		var client *rex.Client
+		if diagnostics.Measure(StageTunnel, func() error {
+			var err error
+			client, err = rex.ConnectDial(ctx, t.dial)
+			return err
+		}) == nil {
+			return t, client, nil
+		}
+		t.close()
+		if ctx.Err() != nil {
+			return nil, nil, ctx.Err()
+		}
+	}
 	if err := diagnostics.Measure(StageNetwork, func() error { return prepareNetwork(ctx, addr) }); err != nil {
 		return nil, nil, err
 	}
+	server := addr
 	if runtime.GOOS == "ios" {
-		addr = hostnameRelayAddr(addr)
+		server = hostnameRelayAddr(addr)
 	}
-	logf := quiet
-	debugTunnel := os.Getenv("RETTY_DEBUG_TUNNEL") == "1"
-	if diagnostics != nil || debugTunnel {
-		logf = func(format string, args ...any) {
-			if event := diagnostics.TransportLog(format, args...); event != "" && debugTunnel {
-				log.Printf("Retty tunnel: %s", event)
-			}
-		}
-	}
-	tunnel := &tailcat.Client{Server: addr, Logf: logf}
-	dial := func(parent context.Context) (net.Conn, error) {
-		ctx, cancel := context.WithTimeout(parent, 15*time.Second)
-		defer cancel()
-		return tunnel.DialTCPPort(ctx, Port)
-	}
+	t := openTunnel(addr, server)
+	t.setLog(logf)
 	var client *rex.Client
 	err = diagnostics.Measure(StageTunnel, func() error {
 		var err error
-		client, err = rex.ConnectDial(ctx, dial)
+		client, err = rex.ConnectDial(ctx, t.dial)
 		return err
 	})
 	if err != nil {
-		go tunnel.Close()
+		t.close()
 		if reportFailure {
 			log.Printf("Retty tunnel dial failed: %s", err)
 		}
 		return nil, nil, err
 	}
-	unbind := func() {}
-	stopDiscovery := func() {}
-	if len(quality) > 0 && quality[0] != nil {
-		lifetime, cancel := context.WithCancel(context.Background())
-		unbind = quality[0].bindProbe(serializedPathProbe(lifetime, func(ctx context.Context) (PathSample, error) {
-			p, err := tunnel.DiscoPing(ctx)
-			if err != nil {
-				return PathSample{}, err
-			}
-			return PathSample{At: time.Now(), Direct: p.Endpoint != "", Latency: time.Duration(p.LatencySeconds * float64(time.Second))}, nil
-		}))
-		stop := startPathDiscovery(quality[0])
-		stopDiscovery = func() { cancel(); stop() }
-	}
-	return client, func() {
-		stopDiscovery()
-		unbind()
-		// Send the final FIN/ACK before shutting down the userspace TCP stack.
-		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-		defer cancel()
-		tunnel.DrainTCP(ctx)
-		tunnel.Close()
-	}, nil
+	return t, client, nil
 }
 
-// Probe checks whether the saved capability reaches a responding Retty server.
-// It sends only hello: no device registration, session list or terminal attach.
-func Probe(ctx context.Context, raw string) error {
-	client, closeTunnel, err := connect(ctx, raw, false, nil)
-	if err != nil {
-		return err
+func tunnelLog(diagnostics *Diagnostics) func(string, ...any) {
+	debugTunnel := os.Getenv("RETTY_DEBUG_TUNNEL") == "1"
+	if diagnostics == nil && !debugTunnel {
+		return nil
 	}
-	defer closeTunnel()
-	defer client.Close()
-	return probeClient(ctx, client)
-}
-
-func probeClient(ctx context.Context, client *rex.Client) error {
-	_, _, err := readDesktopInfo(ctx, client, false)
-	return err
+	return func(format string, args ...any) {
+		if event := diagnostics.TransportLog(format, args...); event != "" && debugTunnel {
+			log.Printf("Retty tunnel: %s", event)
+		}
+	}
 }
 
 // Preview reads host and session display metadata without registering a phone
-// or attaching to a terminal. It shares the availability probe's short tunnel.
+// or attaching to a terminal. A desktop that answers keeps its tunnel parked
+// briefly, for the next probe or a connection to reuse.
 func Preview(ctx context.Context, raw string) (rex.Hello, []rex.SessionInfo, error) {
-	client, closeTunnel, err := connect(ctx, raw, false, nil)
+	t, client, err := dialTunnel(ctx, raw, false, nil)
 	if err != nil {
 		return rex.Hello{}, nil, err
 	}
-	defer closeTunnel()
-	defer client.Close()
-	return readDesktopInfo(ctx, client, true)
+	hello, sessions, err := readDesktopInfo(ctx, client, true)
+	client.Close()
+	if err != nil {
+		t.close()
+	} else {
+		parkTunnel(t)
+	}
+	return hello, sessions, err
 }
 
 func readDesktopInfo(ctx context.Context, client *rex.Client, list bool) (rex.Hello, []rex.SessionInfo, error) {

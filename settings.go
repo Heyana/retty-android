@@ -15,6 +15,8 @@ import (
 type settings struct {
 	// Appearance is "light", "dark", or "" to follow the system.
 	Appearance                       string  `json:"appearance,omitempty"`
+	DesktopLayout                    string  `json:"desktopLayout,omitempty"`
+	SidebarCollapsed                 bool    `json:"sidebarCollapsed,omitempty"`
 	FontSize                         float32 `json:"fontSize,omitempty"`
 	LinkEditor                       string  `json:"linkEditor,omitempty"`
 	CopyRawText                      bool    `json:"copyRawText,omitempty"`
@@ -47,7 +49,42 @@ func readSettings() settings {
 	default:
 		s.LinkEditor = ""
 	}
+	if s.DesktopLayout != "sidebar" {
+		s.DesktopLayout = ""
+	}
 	return s
+}
+
+func (a *App) setDesktopLayout(layout string) {
+	if layout != "sidebar" {
+		layout = ""
+	}
+	prefs.DesktopLayout = layout
+	a.sidebarVisibleTab = nil
+	saveSettings()
+	if !a.settingsOpen {
+		a.focusCurrentTerminal()
+	}
+}
+
+func (a *App) focusCurrentTerminal() {
+	if t := a.tab(); t != nil && t.Focus != nil {
+		if t.Focus.find.open {
+			t.Focus.find.focus = true
+		} else {
+			a.focusReq = t.Focus
+		}
+	}
+}
+
+func (a *App) toggleTabSidebar() {
+	if prefs.DesktopLayout != "sidebar" {
+		return
+	}
+	prefs.SidebarCollapsed = !prefs.SidebarCollapsed
+	a.sidebarVisibleTab = nil
+	saveSettings()
+	a.focusCurrentTerminal()
 }
 
 func (a *App) setLinkEditor(editor string) {
@@ -57,11 +94,9 @@ func (a *App) setLinkEditor(editor string) {
 
 func (a *App) setCopyRawText(raw bool) {
 	prefs.CopyRawText = raw
-	for _, tab := range a.tabs {
-		for _, pane := range tab.panes() {
-			if pane.term != nil {
-				pane.term.SetCopyRawText(raw)
-			}
+	for _, p := range a.allPanes() {
+		if p.term != nil {
+			p.term.SetCopyRawText(raw)
 		}
 	}
 	saveSettings()
@@ -98,11 +133,9 @@ func (a *App) setFontSize(size float32) {
 	size = min(max(size, 8), 32)
 	prefs.FontSize = size
 	termFont.Size = size
-	for _, t := range a.tabs {
-		for _, p := range t.panes() {
-			if p.term != nil {
-				p.term.SetFont(termFont)
-			}
+	for _, p := range a.allPanes() {
+		if p.term != nil {
+			p.term.SetFont(termFont)
 		}
 	}
 	saveSettings()

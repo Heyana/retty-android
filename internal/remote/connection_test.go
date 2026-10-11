@@ -49,7 +49,7 @@ func TestWatchConnectionSurvivesRelayStall(t *testing.T) {
 		case results <- result{s, err}:
 		case <-ctx.Done():
 		}
-	}, 10*time.Millisecond, ResumeCheckTimeout)
+	}, 10*time.Millisecond, ResumeCheckTimeout, nil)
 	for i := 0; i < 2; i++ {
 		select {
 		case got := <-results:
@@ -109,7 +109,7 @@ func TestWatchConnectionDetectsClosedTransportImmediately(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	result := make(chan error, 1)
-	go watchConnection(ctx, client, nil, func(_ []rex.SessionInfo, err error) { result <- err }, time.Hour, ResumeCheckTimeout)
+	go watchConnection(ctx, client, nil, func(_ []rex.SessionInfo, err error) { result <- err }, time.Hour, ResumeCheckTimeout, nil)
 	peer.Close()
 	select {
 	case err := <-result:
@@ -139,7 +139,7 @@ func TestWatchConnectionStoppedDuringPollRetainsSocket(t *testing.T) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		watchConnection(ctx, client, func() *rex.DeviceInfo { return &rex.DeviceInfo{Name: "phone"} }, func(_ []rex.SessionInfo, err error) { delivered <- err }, time.Millisecond, 50*time.Millisecond)
+		watchConnection(ctx, client, func() *rex.DeviceInfo { return &rex.DeviceInfo{Name: "phone"} }, func(_ []rex.SessionInfo, err error) { delivered <- err }, time.Millisecond, 50*time.Millisecond, nil)
 	}()
 	var req rex.Request
 	select {

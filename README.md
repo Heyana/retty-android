@@ -36,6 +36,7 @@ Retty 把 shell 交给一个常驻的会话服务：关掉窗口、锁上手机�
 - **🔁 会话永不中断**　终端由后台服务持有，界面只是入口。退出 App、网络断开、切换设备都不会结束任务，全屏程序重连后原样恢复。
 - **📱 一部手机，所有电脑**　扫码连上 Mac 和 Linux 服务器，首页汇总各主机的最近会话，一点直达。看到的是同一个 PTY，不是截图或简化视图；全屏程序按手机屏幕重新绘制。
 - **🤖 懂 Agent 的终端**　识别 37 种终端 Agent 的名称和图标；Claude Code、Codex、Gemini CLI、Qwen Code 等待授权、完成或失败时，在桌面或手机上提醒你。
+- **📥 统一待处理**　桌面和手机汇总需要授权、回答及尚未查看的结果，点击直达对应窗格；支持新版源服务时同步已读。Codex / Claude 的完成提醒优先显示当前轮最终回复的简短摘录。
 - **🌐 加密互连，无需自建服务器**　Mac、iPhone 与 Linux 主机通过 Tailcat 端到端加密隧道互连。扫码或粘贴连接码即可连接，无需 Tailscale 账号、VPN 或开放入站端口；无桌面的主机运行 `retty serve` 即可接入。
 - **⚡ 原生且轻量**　Go 编写，基于 [MyGo](https://github.com/daodao97/mygo) 原生 UI 与 Ghostty 的 libghostty-vt 渲染终端；桌面不用 WebView，iOS 使用 UIKit 宿主。
 

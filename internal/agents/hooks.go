@@ -16,27 +16,45 @@ func HookCommand(agent string) string {
 	return `if [ -n "$RETTY_HOOK" ] && [ -x "$RETTY_HOOK" ]; then "$RETTY_HOOK" -agent-hook ` + agent + `; fi`
 }
 
-func HookPath(agent string) (string, error) {
+// ConfigEnv names the environment variable that relocates an agent's
+// configuration directory, or is empty for agents that have none.
+func ConfigEnv(agent string) string {
+	switch agent {
+	case "claude":
+		return "CLAUDE_CONFIG_DIR"
+	case "codex":
+		return "CODEX_HOME"
+	}
+	return ""
+}
+
+// ConfigDir is an agent's configuration directory: the one its ConfigEnv
+// names when set, otherwise ~/.<agent>.
+func ConfigDir(agent string) (string, error) {
+	if key := ConfigEnv(agent); key != "" {
+		if dir := os.Getenv(key); dir != "" {
+			return dir, nil
+		}
+	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
 	}
-	dir, file := "", ""
+	return filepath.Join(home, "."+agent), nil
+}
+
+func HookPath(agent string) (string, error) {
+	file := "settings.json"
 	switch agent {
-	case "claude":
-		dir, file = os.Getenv("CLAUDE_CONFIG_DIR"), "settings.json"
-		if dir == "" {
-			dir = filepath.Join(home, ".claude")
-		}
-	case "gemini", "qwen":
-		dir, file = filepath.Join(home, "."+agent), "settings.json"
+	case "claude", "gemini", "qwen":
 	case "codex":
-		dir, file = os.Getenv("CODEX_HOME"), "hooks.json"
-		if dir == "" {
-			dir = filepath.Join(home, ".codex")
-		}
+		file = "hooks.json"
 	default:
 		return "", fmt.Errorf("unsupported hook agent %q", agent)
+	}
+	dir, err := ConfigDir(agent)
+	if err != nil {
+		return "", err
 	}
 	return filepath.Join(dir, file), nil
 }

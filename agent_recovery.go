@@ -9,18 +9,17 @@ import (
 // to close a resumed pane; a CLI error must keep its output and retry action.
 func (a *App) checkAgentRestoreExit(p *Pane, stream *rex.Stream) {
 	p.streamEnded = true
-	sid := p.SID
+	sid, update := p.SID, a.desktopDispatcher()
 	go func() {
 		infos, err := a.client.List()
 		var info *rex.SessionInfo
 		for _, in := range infos {
 			if in.ID == sid {
-				copy := in
-				info = &copy
+				info = &in
 				break
 			}
 		}
-		a.post(func() {
+		update(func() {
 			if p.closed || a.quitting || p.stream != stream {
 				return
 			}
@@ -86,12 +85,13 @@ func (a *App) retryAgentRestore(p *Pane) {
 		cols, rows = p.term.Size()
 	}
 	p.recoveryBusy = true
+	update := a.desktopDispatcher()
 	go func() {
 		r, err := a.client.RestoreAgent(sid, cols, rows, true)
 		if err != nil {
 			r.Error = err.Error()
 		}
-		a.post(func() {
+		update(func() {
 			p.recoveryBusy = false
 			// Ordinary GUI quit detaches and must preserve a restore already
 			// started by the daemon. Only an explicit pane close ends it.

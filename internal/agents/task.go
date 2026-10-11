@@ -10,6 +10,8 @@ import (
 	"strings"
 	"time"
 	"unicode"
+
+	"retty/internal/atomicfile"
 )
 
 const TaskTextLimit = 160
@@ -60,28 +62,11 @@ func SaveHookTask(dir, agent string, input HookInput, data []byte, at time.Time)
 	case "继续", "继续吧", "实现吧", "好的", "好", "可以", "嗯", "ok", "yes", "continue", "go ahead":
 		return nil
 	}
-	path := taskPath(dir, agent, input.SessionID)
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
 	saved, err := json.Marshal(taskExcerpt{Text: text, At: at})
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(filepath.Dir(path), ".task-*")
-	if err != nil {
-		return err
-	}
-	defer os.Remove(f.Name())
-	_, err = f.Write(saved)
-	closed := f.Close()
-	if err != nil {
-		return err
-	}
-	if closed != nil {
-		return closed
-	}
-	return os.Rename(f.Name(), path)
+	return atomicfile.Write(taskPath(dir, agent, input.SessionID), saved)
 }
 
 // ReadTask cannot attribute a newer prompt to an older completion. Expired

@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"github.com/egoist/mygo/push/apns"
 	"os"
 	"path/filepath"
 	"retty/internal/agents"
+	"retty/internal/atomicfile"
 	"retty/internal/rex"
 	"strings"
 	"sync"
@@ -108,20 +108,7 @@ func (s *service) saveLocked() error {
 	if err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(s.dir, ".push-state-")
-	if err != nil {
-		return err
-	}
-	name := f.Name()
-	defer os.Remove(name)
-	if _, err = f.Write(data); err != nil {
-		f.Close()
-		return err
-	}
-	if err = f.Close(); err != nil {
-		return err
-	}
-	return os.Rename(name, filepath.Join(s.dir, "push-devices.json"))
+	return atomicfile.Write(filepath.Join(s.dir, "push-devices.json"), data)
 }
 func (s *service) register(r Registration) error {
 	if err := r.Validate(); err != nil {
@@ -194,11 +181,9 @@ func (s *service) register(r Registration) error {
 	if d.Receipts == nil {
 		d.Receipts = map[string]time.Time{}
 	}
-	for id, at := range d.Receipts {
-		if now.Sub(at) > receiptLifetime {
-			delete(d.Receipts, id)
-			changed = true
-		}
+	// Expire before acknowledging, so a repeated old receipt is stored afresh.
+	if pruneReceipts(d.Receipts, now, len(d.Receipts)) {
+		changed = true
 	}
 	for _, id := range r.Receipts {
 		if _, seen := d.Receipts[id]; !seen {
@@ -216,19 +201,8 @@ func (s *service) register(r Registration) error {
 			changed = true
 		}
 	}
-	if len(d.Receipts) > 256 {
-		// Preserve newest receipts. They are acknowledgements, never credentials.
-		for len(d.Receipts) > 256 {
-			oldest := ""
-			var at time.Time
-			for id, t := range d.Receipts {
-				if oldest == "" || t.Before(at) {
-					oldest, at = id, t
-				}
-			}
-			delete(d.Receipts, oldest)
-		}
-	}
+	// Preserve newest receipts. They are acknowledgements, never credentials.
+	pruneReceipts(d.Receipts, now, 256)
 	s.state.Devices[r.ID] = d
 	if changed {
 		return s.saveLocked()
@@ -461,9 +435,4 @@ func (s *service) configure() {
 	}
 	s.provider = s.managed
 	s.lastError = ""
-}
-
-func (s *service) String() string {
-	status := s.status()
-	return fmt.Sprintf("push configured=%t devices=%d sent=%d", status.Configured, status.Devices, status.Sent)
 }

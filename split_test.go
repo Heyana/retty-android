@@ -159,3 +159,24 @@ func TestContextSplitIgnoresClosedPane(t *testing.T) {
 		t.Fatal("stale context menu split a surviving pane")
 	}
 }
+
+// Restarting a pane ends its session as closing it does, and closing the
+// new pane gives the focus back to the pane before, never the dead one.
+func TestRestartedPaneLeavesFocusHistory(t *testing.T) {
+	a, tt := newTestApp(t)
+	tab := a.tab()
+	left := tab.Focus
+	a.split(false)
+	old := tab.Focus
+	a.restartFocused()
+	restarted := tab.Focus
+	tt.Frame()
+	if restarted == old || !old.closed || !a.closedSessions[old.SID] || slices.Contains(tab.recent, old) {
+		t.Fatal("restart kept the old pane in the tab's focus history or session list")
+	}
+	a.closePane(restarted)
+	tt.Frame()
+	if tab.Focus != left || len(tab.panes()) != 1 {
+		t.Fatal("closing the restarted pane did not focus the pane before it")
+	}
+}

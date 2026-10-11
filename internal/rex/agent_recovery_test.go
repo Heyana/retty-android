@@ -4,6 +4,7 @@ package rex
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -148,12 +149,46 @@ func TestAgentRecoveryPersistsLifecycleWithoutViewer(t *testing.T) {
 		t.Fatal("lost Agent configuration directory")
 	}
 	report("second", "Stop", "") // completed response is still resumable
+	if s.recovery[ss.id].Revision != ss.agent.state.CompletionRevision || s.recovery[ss.id].Revision == 0 {
+		t.Fatal("completion event sequence was not persisted")
+	}
 	if s.recovery[ss.id].SessionID != "second" {
 		t.Fatal("completion lost conversation")
 	}
 	report("second", "SessionEnd", "")
 	if err := loaded.loadRecovery(Dir()); err != nil || len(loaded.recovery) != 0 {
 		t.Fatal("explicit end resurrected conversation", err)
+	}
+}
+
+func TestAgentRecoveryContinuesNoticeSequence(t *testing.T) {
+	for _, floor := range []uint64{0, 9} {
+		t.Run(fmt.Sprint(floor), func(t *testing.T) {
+			s := recoveryServer(t)
+			fakeResumeCLI(t, "claude", false)
+			s.recovery["pane"] = agentResume{Agent: "claude", SessionID: "thread", Dir: Dir(), Revision: floor}
+			r, err := s.restoreAgent(Request{SID: "pane", Cols: 80, Rows: 24})
+			if err != nil || r.Session == nil {
+				t.Fatal(r, err)
+			}
+			ss := s.sessions["pane"]
+			before := ss.info()
+			if before.Agent.CompletionRevision < floor || before.Agent.CompletionRevision == 0 {
+				t.Fatal("restore lost sequence floor", before.Agent)
+			}
+			old := before
+			old.Agent.State = agents.Completed
+			for _, event := range []string{"UserPromptSubmit", "Stop"} {
+				err := s.reportAgent(Request{SID: ss.id, Token: ss.agentToken, AgentEvent: &AgentEvent{Agent: "claude", At: time.Now(), Input: agents.HookInput{SessionID: "thread", Event: event, CWD: Dir()}}})
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			next := ss.info()
+			if next.Agent.CompletionRevision <= before.Agent.CompletionRevision || AgentNoticeID("source", next) == AgentNoticeID("source", old) {
+				t.Fatal("restored turn reused a read notification", next.Agent)
+			}
+		})
 	}
 }
 

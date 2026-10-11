@@ -14,7 +14,10 @@ type desktopLease struct {
 	Expires time.Time
 }
 
-func pruneReceipts(receipts map[string]time.Time, now time.Time, limit int) {
+// pruneReceipts drops expired receipts, then the oldest beyond limit, and
+// reports whether it removed any.
+func pruneReceipts(receipts map[string]time.Time, now time.Time, limit int) bool {
+	n := len(receipts)
 	for id, at := range receipts {
 		if now.Sub(at) > receiptLifetime {
 			delete(receipts, id)
@@ -30,6 +33,7 @@ func pruneReceipts(receipts map[string]time.Time, now time.Time, limit int) {
 		}
 		delete(receipts, oldest)
 	}
+	return len(receipts) != n
 }
 
 func (s *service) desktopActiveLocked(now time.Time) bool {

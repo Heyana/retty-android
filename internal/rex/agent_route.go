@@ -110,10 +110,7 @@ func (s *Server) reportAgent(req Request) error {
 		if err != nil {
 			return err
 		}
-		if err := ss.reportAgent(req.Token, req.AgentEvent); err != nil {
-			return err
-		}
-		return s.recordAgent(ss, req.AgentEvent)
+		return s.deliverAgent(ss, req.Token, req.AgentEvent)
 	}
 	if err := validateAgentEvent(req.AgentEvent); err != nil {
 		return err
@@ -145,8 +142,15 @@ func (s *Server) reportAgent(req Request) error {
 	if err != nil {
 		return err
 	}
-	if err := ss.reportAgent(ss.agentToken, req.AgentEvent); err != nil {
+	return s.deliverAgent(ss, ss.agentToken, req.AgentEvent)
+}
+
+// deliverAgent applies an event to its pane, then records what recovery
+// needs when the event became the pane's current state.
+func (s *Server) deliverAgent(ss *session, token string, event *AgentEvent) error {
+	h, accepted, err := ss.reportAgent(token, event)
+	if err != nil || !accepted {
 		return err
 	}
-	return s.recordAgent(ss, req.AgentEvent)
+	return s.recordAgent(ss, event.Agent, h)
 }

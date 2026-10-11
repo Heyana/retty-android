@@ -16,24 +16,16 @@ import (
 func uploadSessionAlive(ctx context.Context, socket, sid string) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	conn, err := (&net.Dialer{}).DialContext(ctx, "unix", socket)
-	if err != nil {
+	alive, err := rex.SessionAlive(ctx, socket, sid)
+	switch {
+	case errors.Is(err, rex.ErrServerUnavailable):
 		return errors.New("远端会话服务不可用")
-	}
-	client := rex.NewClient(conn, nil)
-	defer client.Close()
-	stop := context.AfterFunc(ctx, func() { client.Close() })
-	defer stop()
-	infos, err := client.List()
-	if err != nil {
+	case err != nil:
 		return errors.New("无法确认远端会话，请重试")
+	case !alive:
+		return errors.New("远端会话已结束，请重新选择会话")
 	}
-	for _, info := range infos {
-		if info.ID == sid && !info.Exited {
-			return ctx.Err()
-		}
-	}
-	return errors.New("远端会话已结束，请重新选择会话")
+	return ctx.Err()
 }
 
 // Receive into a new private directory. Failure/cancellation removes only this
@@ -57,11 +49,7 @@ func (b *Bridge) serveFileUpload(conn net.Conn, reader *bufio.Reader, socket str
 		fail(errors.New("远端正在接收文件，请稍后重试"))
 		return
 	}
-	parent := b.imageContext
-	if parent == nil {
-		parent = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(parent, rex.FileUploadTimeout)
+	ctx, cancel := context.WithTimeout(b.imageContext, rex.FileUploadTimeout)
 	defer cancel()
 	stop := context.AfterFunc(ctx, func() { conn.Close() })
 	defer stop()

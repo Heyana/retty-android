@@ -8,9 +8,6 @@ import (
 	"retty/internal/rex"
 )
 
-const mobileResumeCheckTimeout = remote.ResumeCheckTimeout
-const mobileResumeRecoveryTimeout = remote.ResumeRecoveryTimeout
-
 func (m *mobileApp) connectionUsable() bool {
 	return !m.reconnecting && remote.ConnectionUsable(m.client)
 }
@@ -62,6 +59,7 @@ func (m *mobileApp) enterBackground() {
 		return
 	}
 	m.background = true
+	remote.CloseWarmTunnels()
 	if m.releaseSizeLock() {
 		m.lockSuspended = true
 		// Keep the terminal and control connection, but stop this inactive
@@ -113,7 +111,7 @@ func (m *mobileApp) enterForeground() {
 		return
 	}
 	m.link, m.resumeLink = m.resumeLink, ""
-	if m.connectionIssue != nil && !m.connectionIssue.automatic {
+	if m.manualIssue() {
 		m.invalidate()
 		return
 	}
@@ -132,7 +130,7 @@ func (m *mobileApp) checkRetainedConnection() {
 	client, generation := m.client, m.generation
 	m.resumeCheckID++
 	checkID := m.resumeCheckID
-	ctx, cancel := context.WithTimeout(context.Background(), mobileResumeRecoveryTimeout)
+	ctx, cancel := context.WithTimeout(context.Background(), remote.ResumeRecoveryTimeout)
 	m.cancel = cancel
 	m.reconnecting = true // Disable terminal input until the check completes.
 	if m.term != nil {
@@ -140,7 +138,7 @@ func (m *mobileApp) checkRetainedConnection() {
 	}
 	m.invalidate()
 	go func() {
-		next, hello, sessions, err := resumeMobileConnection(ctx, client, m.pushSnapshot.Load())
+		next, hello, sessions, err := remote.ResumeConnection(ctx, client, m.pushSnapshot.Load())
 		cancel()
 		mygo.RunOnMain(func() {
 			if m.generation != generation || m.client != client || m.background || m.resumeCheckID != checkID {
@@ -161,16 +159,6 @@ func (m *mobileApp) checkRetainedConnection() {
 	}()
 }
 
-// Check a retained socket first, then reopen only its control channel on the
-// same authenticated Tailcat tunnel. A network change may require a fresh
-// tunnel; the caller falls back to the ordinary reconnect in that case.
-func resumeMobileConnection(ctx context.Context, client *rex.Client, info *rex.DeviceInfo) (*rex.Client, rex.Hello, []rex.SessionInfo, error) {
-	return remote.ResumeConnection(ctx, client, info)
-}
-func checkMobileConnection(ctx context.Context, client *rex.Client, info *rex.DeviceInfo) ([]rex.SessionInfo, error) {
-	return remote.CheckConnection(ctx, client, info)
-}
-
 func (m *mobileApp) finishRetainedConnection(client *rex.Client, generation int, sessions []rex.SessionInfo, err error) {
 	if m.generation != generation || m.client != client || m.background {
 		return
@@ -188,30 +176,37 @@ func (m *mobileApp) finishRetainedConnection(client *rex.Client, generation int,
 	m.reconnecting, m.retryAttempt, m.error = false, 0, ""
 	m.connectionIssue, m.connectionDetailsOpen = nil, false
 	m.updateSessions(sessions, false)
-	if m.resumeSID != "" && m.resumeSID != m.selected.ID {
-		sid := m.resumeSID
-		m.detach()
-		m.openSessionID(sid)
-	} else if m.term != nil && m.stream != nil {
-		found := false
-		for _, session := range sessions {
-			if session.ID == m.selected.ID {
-				geometryChanged := !m.stream.HasScreenSize() && (session.Cols != m.selected.Cols || session.Rows != m.selected.Rows)
-				m.selected = session
-				m.stream.geometry(session.Cols, session.Rows)
-				if !m.stream.hasTransport() || geometryChanged {
-					m.reattach(session)
-				}
-				found = true
-				break
-			}
-		}
-		if !found {
-			m.detach()
-			m.error = "原会话已结束，请选择其他会话"
-		}
-	}
-	m.resumeSID = ""
+	m.resumeSelected()
 	m.startPolling(client, generation)
 	m.invalidate()
+}
+
+// resumeSelected restores the open terminal after a reconnect, or opens the
+// session chosen while the connection was away. A recovering connection has
+// already dropped the view's transport; a retained one reattaches only when
+// its transport closed or the session's geometry changed meanwhile.
+func (m *mobileApp) resumeSelected() {
+	sid := m.resumeSID
+	m.resumeSID = ""
+	if sid != "" && sid != m.selected.ID {
+		m.detach()
+		m.openSessionID(sid)
+		return
+	}
+	if m.term == nil || m.stream == nil {
+		return
+	}
+	for _, session := range m.sessions {
+		if session.ID == m.selected.ID {
+			geometryChanged := !m.stream.HasScreenSize() && (session.Cols != m.selected.Cols || session.Rows != m.selected.Rows)
+			m.selected = session
+			m.stream.geometry(session.Cols, session.Rows)
+			if !m.stream.hasTransport() || geometryChanged {
+				m.reattach(session)
+			}
+			return
+		}
+	}
+	m.detach()
+	m.error = "原会话已结束，请选择其他会话"
 }

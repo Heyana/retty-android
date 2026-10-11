@@ -22,23 +22,12 @@ func pasteImageIntoSession(ctx context.Context, socket, sid string, image []byte
 	if err := rex.ValidateClipboardImage(image); err != nil {
 		return err
 	}
-	control, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", socket)
-	if err != nil {
+	switch alive, err := rex.SessionAlive(ctx, socket, sid); {
+	case errors.Is(err, rex.ErrServerUnavailable):
 		return errors.New("桌面会话服务不可用")
-	}
-	client := rex.NewClient(control, nil)
-	stopControl := context.AfterFunc(ctx, func() { client.Close() })
-	sessions, err := client.List()
-	stopControl()
-	client.Close()
-	if err != nil {
+	case err != nil:
 		return errors.New("无法确认桌面会话，请重试")
-	}
-	alive := false
-	for _, session := range sessions {
-		alive = alive || session.ID == sid && !session.Exited
-	}
-	if !alive {
+	case !alive:
 		return errors.New("会话已结束，请重新选择会话")
 	}
 	conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(ctx, "unix", socket)

@@ -13,7 +13,7 @@ import (
 func AgentNoticeID(desktop string, s SessionInfo) string {
 	a := s.Agent
 	revision := a.WaitRevision
-	if a.State == agents.Completed || a.State == agents.Failed {
+	if agents.Finished(a.State) {
 		revision = a.CompletionRevision
 	}
 	identity := a.ID
@@ -60,8 +60,8 @@ func LegacyCompletionState(previous, next SessionInfo) AgentState {
 		return s
 	}
 	s.CompletionRevision = previous.Agent.CompletionRevision
-	finished := s.State == agents.Completed || s.State == agents.Failed
-	wasFinished := previous.Agent.State == agents.Completed || previous.Agent.State == agents.Failed
+	finished := agents.Finished(s.State)
+	wasFinished := agents.Finished(previous.Agent.State)
 	same := s.SessionID == previous.Agent.SessionID && s.ID == previous.Agent.ID
 	newInput := next.LastInput.After(previous.Agent.Updated) && s.Updated.After(next.LastInput)
 	if finished && (!wasFinished || !same || newInput) {
@@ -74,5 +74,5 @@ func LegacyCompletionState(previous, next SessionInfo) AgentState {
 
 // AgentNoticeState remains true only while this exact reminder is relevant.
 func AgentNoticeState(s SessionInfo) bool {
-	return s.Agent.State == agents.Waiting || s.Agent.State == agents.Completed || s.Agent.State == agents.Failed
+	return s.Agent.State == agents.Waiting || agents.Finished(s.Agent.State)
 }

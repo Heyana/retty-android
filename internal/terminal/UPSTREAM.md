@@ -101,6 +101,12 @@ Future terminal fixes should land in MyGo first, then be carried into the local
 vendor where applicable. Keep MyGo's native manifest/build generator and Retty's
 iOS/CLI packaging independent when synchronizing.
 
+Fork commit `c4a1f47` on `main` adds `Terminal.ClearSelection`, which cancels
+the local highlight without sending input or changing clipboard contents.
+Retty carries the same API into its vendor and also clears the compact mobile
+presentation's selection. The mobile copy menu uses it when dismissed by an
+outside press or Escape; copying still keeps the selection until dismissed.
+
 Fork commit `f83962e` on `feat/ios-platform` incorporates upstream through
 `296ea85` (v0.4.1), first merged into fork `main` as `45e1d2a`. The terminal
 plugin and its native manifest are unchanged from `e482207`; Retty retains

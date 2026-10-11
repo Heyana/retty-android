@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 )
@@ -26,6 +27,10 @@ type Client struct {
 	pending map[int64]chan Response
 	err     error
 	closed  chan struct{}
+
+	// The last list the server sent, which it then need not repeat.
+	listETag string
+	listed   []SessionInfo
 }
 
 // Connect connects to the server, starting one in the background when
@@ -152,12 +157,12 @@ func (c *Client) read() {
 }
 
 // call sends a request and decodes the response's data into out.
-func (c *Client) call(req Request, out any) error {
+func (c *Client) exchange(req Request) (Response, error) {
 	ch := make(chan Response, 1)
 	c.mu.Lock()
 	if c.err != nil {
 		c.mu.Unlock()
-		return errors.New("rex: connection to the server lost")
+		return Response{}, errors.New("rex: connection to the server lost")
 	}
 	c.nextID++
 	req.ID = c.nextID
@@ -168,7 +173,10 @@ func (c *Client) call(req Request, out any) error {
 	_, err := c.conn.Write(append(b, '\n'))
 	c.wmu.Unlock()
 	if err != nil {
-		return err
+		c.mu.Lock()
+		delete(c.pending, req.ID)
+		c.mu.Unlock()
+		return Response{}, err
 	}
 	var res Response
 	select {
@@ -177,41 +185,60 @@ func (c *Client) call(req Request, out any) error {
 		c.mu.Lock()
 		delete(c.pending, req.ID)
 		c.mu.Unlock()
-		return fmt.Errorf("rex: %s timed out: %w", req.Op, context.DeadlineExceeded)
+		return Response{}, fmt.Errorf("rex: %s timed out: %w", req.Op, context.DeadlineExceeded)
 	}
 	if res.Error != "" {
-		return errors.New(res.Error)
+		return Response{}, errors.New(res.Error)
 	}
-	if out != nil && len(res.Data) > 0 {
-		return json.Unmarshal(res.Data, out)
-	}
-	return nil
+	return res, nil
 }
 
-func (c *Client) Hello() (h Hello, err error) {
-	err = c.call(Request{Op: "hello"}, &h)
+func (c *Client) call(req Request, out any) error {
+	res, err := c.exchange(req)
+	if err == nil && out != nil && len(res.Data) > 0 {
+		err = json.Unmarshal(res.Data, out)
+	}
+	return err
+}
+
+func (c *Client) Hello() (Hello, error) { return c.hello(nil) }
+
+func (c *Client) HelloFrom(device DeviceInfo) (Hello, error) { return c.hello(&device) }
+
+func (c *Client) hello(device *DeviceInfo) (h Hello, err error) {
+	err = c.call(Request{Op: "hello", Device: device}, &h)
 	if err == nil && h.Version == 4 && h.Host.ID == "" {
 		h.Host.ID = legacyHostID(h.Host)
 	}
 	return
 }
 
-func (c *Client) HelloFrom(device DeviceInfo) (h Hello, err error) {
-	err = c.call(Request{Op: "hello", Device: &device}, &h)
-	if err == nil && h.Version == 4 && h.Host.ID == "" {
-		h.Host.ID = legacyHostID(h.Host)
+func (c *Client) List() ([]SessionInfo, error) { return c.list(nil) }
+
+func (c *Client) ListFrom(device DeviceInfo) ([]SessionInfo, error) { return c.list(&device) }
+
+// list sends the ETag of the last list, and reuses that list when the
+// server answers that it is unchanged. Callers get their own copy.
+func (c *Client) list(device *DeviceInfo) ([]SessionInfo, error) {
+	c.mu.Lock()
+	etag, listed := c.listETag, c.listed
+	c.mu.Unlock()
+	res, err := c.exchange(Request{Op: "list", Device: device, ETag: etag})
+	if err != nil {
+		return nil, err
 	}
-	return
-}
-
-func (c *Client) List() (s []SessionInfo, err error) {
-	err = c.call(Request{Op: "list"}, &s)
-	return
-}
-
-func (c *Client) ListFrom(device DeviceInfo) (s []SessionInfo, err error) {
-	err = c.call(Request{Op: "list", Device: &device}, &s)
-	return
+	if etag == "" || res.ETag != etag || len(res.Data) > 0 {
+		listed = nil
+		if len(res.Data) > 0 {
+			if err := json.Unmarshal(res.Data, &listed); err != nil {
+				return nil, err
+			}
+		}
+		c.mu.Lock()
+		c.listETag, c.listed = res.ETag, listed
+		c.mu.Unlock()
+	}
+	return slices.Clone(listed), nil
 }
 
 func (c *Client) Create(o CreateOptions) (s SessionInfo, err error) {
@@ -220,6 +247,12 @@ func (c *Client) Create(o CreateOptions) (s SessionInfo, err error) {
 }
 
 func (c *Client) Kill(sid string) error { return c.call(Request{Op: "kill", SID: sid}, nil) }
+
+// MarkAttention acknowledges one exact result. Call only when Hello.Attention
+// is advertised; it never sends input or changes a size lease.
+func (c *Client) MarkAttention(sid, notice string) error {
+	return c.call(Request{Op: "markAttention", SID: sid, Notice: notice}, nil)
+}
 
 // RestoreAgent reattaches a live session or resumes its exact saved conversation.
 // Call only when Hello.AgentRecovery is advertised. It never replays input.

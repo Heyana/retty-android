@@ -1,10 +1,10 @@
 package main
 
 import (
+	"cmp"
 	"encoding/json"
 	"slices"
 
-	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
 	"retty/internal/rex"
 )
@@ -25,7 +25,7 @@ func mergeRecentSessions(first, second []mobileRecentSession) []mobileRecentSess
 	seen := map[string]bool{}
 	for _, entries := range [][]mobileRecentSession{first, second} {
 		for _, entry := range entries {
-			key := entry.Desktop + "\x00" + entry.Session
+			key := sessionKey(entry.Desktop, entry.Session)
 			if entry.Desktop == "" || entry.Session == "" || seen[key] {
 				continue
 			}
@@ -49,13 +49,7 @@ func (m *mobileApp) recentDesktop(key string) (desktopRecent, bool) {
 }
 
 func (m *mobileApp) recentSessionTitle(entry mobileRecentSession) string {
-	if name := m.sessionPreferences[entry.Desktop+"\x00"+entry.Session].Name; name != "" {
-		return name
-	}
-	if entry.Title != "" {
-		return entry.Title
-	}
-	return "终端会话"
+	return cmp.Or(m.sessionPreferences[sessionKey(entry.Desktop, entry.Session)].Name, entry.Title, "终端会话")
 }
 
 func (m *mobileApp) rememberSession(s rex.SessionInfo) {
@@ -68,21 +62,14 @@ func (m *mobileApp) rememberSession(s rex.SessionInfo) {
 }
 
 func (m *mobileApp) persistRecentSessions() {
-	if m.store == nil || m.storage == nil {
-		return
-	}
 	saved, _ := json.Marshal(m.recentSessions)
 	epoch := m.historyEpoch
-	m.storage <- func() {
-		if err := m.store.Set("recent-sessions", saved); err != nil {
-			mygo.RunOnMain(func() {
-				if m.historyEpoch == epoch {
-					m.error = "无法保存最近会话，请重试"
-					m.invalidate()
-				}
-			})
+	m.save("recent-sessions", saved, func() {
+		if m.historyEpoch == epoch {
+			m.error = "无法保存最近会话，请重试"
+			m.invalidate()
 		}
-	}
+	})
 }
 
 func (m *mobileApp) applyLoadedRecentSessions(saved []mobileRecentSession, epoch int) {
@@ -122,11 +109,7 @@ func (m *mobileApp) applyLoadedConnectionHistory(history []desktopRecent, sessio
 			}
 			for _, current := range m.history {
 				if current.Link == previous.Link || sameDesktop(current, previous) {
-					key := current.ID
-					if key == "" {
-						key = current.Link
-					}
-					sessions[i].Desktop = key
+					sessions[i].Desktop = current.key()
 					break
 				}
 			}
@@ -168,10 +151,7 @@ func (m *mobileApp) refreshRecentSessions() {
 
 func (m *mobileApp) migrateRecentDesktop(current desktopRecent) {
 	previousSessions := slices.Clone(m.recentSessions)
-	key := current.ID
-	if key == "" {
-		key = current.Link
-	}
+	key := current.key()
 	for i, entry := range m.recentSessions {
 		previous, ok := m.recentDesktop(entry.Desktop)
 		if ok && (previous.Link == current.Link || sameDesktop(previous, current)) {

@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/egoist/mygo"
@@ -131,14 +132,23 @@ func (a *App) paneIsViewed(p *Pane) bool {
 func (a *App) closeViewedPaneNotice() {
 	if t := a.tab(); t != nil && a.paneIsViewed(t.Focus) {
 		a.closeAgentNotice(t.Focus.noticeKey())
+		if !a.inbox.open && !a.settingsOpen && !a.paletteOpen && !a.desktops.open {
+			a.readInbox(t.Focus)
+		}
 	}
 }
 
+// agentNotice is a notification shown for a pane, and what it tells of:
+// an agent state, "program" or "terminal".
+type agentNotice struct {
+	close func()
+	kind  string
+}
+
 func (a *App) closeAgentNotice(sid string) {
-	if close := a.agentNotices[sid]; close != nil {
-		close()
+	if n := a.agentNotices[sid]; n.close != nil {
+		n.close()
 		delete(a.agentNotices, sid)
-		delete(a.agentNoticeKinds, sid)
 	}
 }
 
@@ -146,17 +156,17 @@ func (a *App) updateAgentNotice(p *Pane, previous rex.AgentState) {
 	s := paneAgentState(p)
 	// A completed one-shot agent may already have returned to the shell
 	// before polling. The authenticated event can still announce its result.
-	if s.State == "" && (p.info.Agent.State == agents.Completed || p.info.Agent.State == agents.Failed) {
+	if s.State == "" && agents.Finished(p.info.Agent.State) {
 		s = p.info.Agent
 	}
-	finished := s.State == agents.Completed || s.State == agents.Failed
+	finished := agents.Finished(s.State)
 	if s.State != agents.Waiting && !finished {
-		if s.State != "" || a.agentNoticeKinds[p.noticeKey()] == agents.Waiting || previous.Source == rex.ProgramStatusSource {
+		if s.State != "" || a.agentNotices[p.noticeKey()].kind == agents.Waiting || previous.Source == rex.ProgramStatusSource {
 			a.closeAgentNotice(p.noticeKey())
 		}
 		return
 	}
-	if (s.State != previous.State && !finished) || (finished && a.agentNoticeKinds[p.noticeKey()] == agents.Waiting) {
+	if (s.State != previous.State && !finished) || (finished && a.agentNotices[p.noticeKey()].kind == agents.Waiting) {
 		a.closeAgentNotice(p.noticeKey())
 	}
 	var hidden bool
@@ -169,7 +179,7 @@ func (a *App) updateAgentNotice(p *Pane, previous rex.AgentState) {
 		}
 		a.agentFinishedNotified[p.noticeKey()] = s.CompletionRevision
 		// Restoring a window must not announce historical completed turns.
-		if previous.SessionID == s.SessionID && previous.CompletionRevision == s.CompletionRevision && (previous.State == agents.Completed || previous.State == agents.Failed) {
+		if previous.SessionID == s.SessionID && previous.CompletionRevision == s.CompletionRevision && agents.Finished(previous.State) {
 			return
 		}
 		hidden = prefs.HideAgentCompletionNotifications
@@ -200,7 +210,7 @@ func (a *App) updateAgentNotice(p *Pane, previous rex.AgentState) {
 		body = rex.AgentNoticeBody(rex.Dir(), p.info)
 	} else {
 		body = p.host.name() + " · " + agentStateLabel(s)
-		if s.Source == rex.ProgramStatusSource {
+		if s.Source == rex.ProgramStatusSource || s.Summary != "" {
 			body += " · " + rex.AgentNoticeBody("", p.info)
 		}
 	}
@@ -230,7 +240,7 @@ func (a *App) showDesktopPaneNotice(p *Pane, kind string, opts mygo.Notification
 		return
 	}
 	if a.agentNotices == nil {
-		a.agentNotices = map[string]func(){}
+		a.agentNotices = map[string]agentNotice{}
 	}
 	a.closeAgentNotice(p.noticeKey())
 	sid := p.noticeKey()
@@ -250,7 +260,7 @@ func (a *App) showDesktopPaneNotice(p *Pane, kind string, opts mygo.Notification
 		}
 	}
 	if a.agentNotify != nil {
-		a.agentNotices[sid] = a.agentNotify(opts, click)
+		a.agentNotices[sid] = agentNotice{a.agentNotify(opts, click), kind}
 	} else {
 		n := mygo.NewNotification(opts)
 		n.OnClick(click)
@@ -259,12 +269,8 @@ func (a *App) showDesktopPaneNotice(p *Pane, kind string, opts mygo.Notification
 			n.Close()
 			return
 		}
-		a.agentNotices[sid] = n.Close
+		a.agentNotices[sid] = agentNotice{n.Close, kind}
 	}
-	if a.agentNoticeKinds == nil {
-		a.agentNoticeKinds = map[string]string{}
-	}
-	a.agentNoticeKinds[sid] = kind
 }
 
 func (a *App) showTerminalNotice(p *Pane, title, body string) {
@@ -275,20 +281,19 @@ func (a *App) showTerminalNotice(p *Pane, title, body string) {
 }
 
 func (a *App) focusAgentPane(sid string) bool {
-	for i, t := range a.tabs {
-		for _, p := range t.panes() {
-			if p.noticeKey() != sid || p.closed {
-				continue
-			}
-			a.settingsOpen, a.paletteOpen, a.renaming = false, false, nil
-			p.find.open, p.find.focus = false, false
-			if t.Zoom != nil && t.Zoom != p {
-				t.Zoom = nil
-			}
-			t.setFocus(p)
-			a.selectTab(i)
-			return true
+	for t, p := range a.allPanes() {
+		if p.noticeKey() != sid || p.closed {
+			continue
 		}
+		a.settingsOpen, a.paletteOpen, a.renaming = false, false, nil
+		a.inbox.open = false
+		p.find.open, p.find.focus = false, false
+		if t.Zoom != nil && t.Zoom != p {
+			t.Zoom = nil
+		}
+		t.setFocus(p)
+		a.selectTab(slices.Index(a.tabs, t))
+		return true
 	}
 	return false
 }

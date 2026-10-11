@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -21,6 +22,8 @@ import (
 )
 
 type mobileApp struct {
+	inbox                              inboxState
+	inboxCache                         map[string][]inboxItem
 	win                                *mygo.Window
 	startup                            *ui.Startup
 	screenActive                       bool
@@ -33,6 +36,8 @@ type mobileApp struct {
 	hello                              rex.Hello
 	sessions                           []rex.SessionInfo
 	term                               *terminal.Terminal
+	selectionMenuTerm                  *terminal.Terminal
+	selectionMenuDismissed             bool
 	stream                             *sessionViewStream
 	selected                           rex.SessionInfo
 	link, error                        string
@@ -137,9 +142,20 @@ func mobileMain() {
 		m.win = mygo.NewWindow(mygo.WindowOptions{Title: "Retty", Width: 390, Height: 844, BackgroundColor: "light-dark(#f5f6f8, #111315)", Content: ui.View(m.view)})
 		m.invalidate()
 		m.loadSessionPreferences()
+		m.loadInbox()
 		m.setupPush()
 		historyEpoch := m.historyEpoch
 		m.storage <- func() {
+			// Until this loads, tunnels use ephemeral keys, as before.
+			secret, err := m.store.Get("tunnel-secret")
+			if errors.Is(err, mygo.ErrSecretNotFound) || err == nil && len(secret) != 32 {
+				secret = make([]byte, 32)
+				rand.Read(secret)
+				err = m.store.Set("tunnel-secret", secret)
+			}
+			if err == nil {
+				remote.SetClientSecret(secret)
+			}
 			var history []desktopRecent
 			var recentSessions []mobileRecentSession
 			var diagnostics []remote.DiagnosticReport
@@ -185,6 +201,19 @@ func (m *mobileApp) invalidate() {
 	}
 }
 
+// save writes a Keychain entry on the storage goroutine, so slow Keychain
+// calls never block a frame. failed, if any, runs on the main thread.
+func (m *mobileApp) save(key string, data []byte, failed func()) {
+	if m.store == nil || m.storage == nil {
+		return
+	}
+	m.storage <- func() {
+		if m.store.Set(key, data) != nil && failed != nil {
+			mygo.RunOnMain(failed)
+		}
+	}
+}
+
 func (m *mobileApp) detach() {
 	m.releaseSizeLock()
 	m.clearKeyboardModifiers()
@@ -217,6 +246,7 @@ func (m *mobileApp) disconnect(forget bool) {
 	m.editingOpen = false
 	m.sessionSettingsOpen = false
 	m.deviceNameOpen = false
+	m.inbox.open = false
 	m.endingOpen, m.closingSession = false, ""
 	if m.cancel != nil {
 		m.cancel()
@@ -229,6 +259,7 @@ func (m *mobileApp) disconnect(forget bool) {
 	m.resumeLink, m.resumeSID = "", ""
 	m.connectionIssue, m.connectionDetailsOpen = nil, false
 	if forget {
+		m.inboxCache = nil
 		m.link, m.resumeLink, m.resumeSID = "", "", ""
 		m.historyEpoch++
 		m.history = nil
@@ -297,7 +328,9 @@ func (m *mobileApp) startConnection(recovering bool) {
 		device = *snapshot
 	}
 	go func() {
-		client, closeTunnel, hello, sessions, err := remote.OpenConnection(ctx, link, device, trace)
+		// Quality is not shown on the phone, but its background discovery
+		// moves a relayed tunnel to a direct path when one becomes possible.
+		client, closeTunnel, hello, sessions, err := remote.OpenConnection(ctx, link, device, trace, &remote.Quality{})
 		report := trace.Finish(err)
 		cancel()
 		mygo.RunOnMain(func() {
@@ -306,12 +339,7 @@ func (m *mobileApp) startConnection(recovering bool) {
 				m.recordConnectionDiagnostic(report)
 			}
 			if generation != m.generation || err != nil {
-				if client != nil {
-					client.Close()
-				}
-				if closeTunnel != nil {
-					go closeTunnel()
-				}
+				remote.CloseConnection(client, closeTunnel)
 				if generation == m.generation {
 					m.connectionFailed(err, recovering)
 				}
@@ -330,43 +358,14 @@ func (m *mobileApp) startConnection(recovering bool) {
 				m.presence = make(map[string]desktopPresence)
 			}
 			m.presence[m.link] = desktopPresence{state: desktopOnline, checked: time.Now()}
-			if m.store != nil {
-				history := append([]desktopRecent(nil), m.history...)
-				m.storage <- func() {
-					if err := writeDesktopHistory(m.store, history); err != nil {
-						mygo.RunOnMain(func() {
-							if m.generation == generation {
-								m.error = "已连接；无法保存连接记录，下次启动请重新扫码"
-								m.invalidate()
-							}
-						})
-					}
+			history, _ := json.Marshal(m.history)
+			m.save("history", history, func() {
+				if m.generation == generation {
+					m.error = "已连接；无法保存连接记录，下次启动请重新扫码"
+					m.invalidate()
 				}
-			}
-			if recovering && m.term != nil && m.stream != nil && (m.resumeSID == "" || m.resumeSID == m.selected.ID) {
-				found := false
-				for _, session := range m.sessions {
-					if session.ID == m.selected.ID {
-						m.selected = session
-						m.stream.geometry(session.Cols, session.Rows)
-						m.reattach(session)
-						found = true
-						break
-					}
-				}
-				if !found {
-					m.detach()
-					m.error = "原会话已结束，请选择其他会话"
-				}
-				m.resumeSID = ""
-			} else if recovering && m.term != nil && m.resumeSID != "" {
-				m.detach()
-			}
-			if m.resumeSID != "" {
-				sid := m.resumeSID
-				m.resumeSID = ""
-				m.openSessionID(sid)
-			}
+			})
+			m.resumeSelected()
 			m.invalidate()
 			m.startPolling(client, generation)
 		})
@@ -398,7 +397,7 @@ func (m *mobileApp) poll(ctx context.Context, client *rex.Client, generation int
 			}
 			m.invalidate()
 		})
-	})
+	}, nil)
 }
 
 func (m *mobileApp) scan() {
@@ -493,6 +492,7 @@ func (m *mobileApp) openSession(s rex.SessionInfo) {
 	m.term, m.stream, m.selected, m.error = term, stream, s, ""
 	m.resumeSID = ""
 	m.rememberSession(s)
+	m.readInbox(s)
 	m.invalidate()
 }
 
@@ -570,6 +570,7 @@ func (m *mobileApp) contentView(c *ui.Context) {
 	m.sessionEndDialog(c)
 	m.connectionDialog(c)
 	m.connectionDiagnosticsDialog(c)
+	m.inboxView(c)
 	if page := m.navigation.Path(); page != m.navigationPage {
 		// A completed edge gesture changes history. Release resources only
 		// after the new page has built; a cancelled preview keeps them alive.
@@ -666,19 +667,15 @@ func (m *mobileApp) header(c *ui.Context, title string, back func(), terminalPag
 				m.connectionDetailsOpen = true
 			}
 		} else {
-			ui.Box(c).Size(44, 44).Shrink(0)
+			m.inboxButton(c)
 		}
 	})
 }
 
+// errorView leaves connection problems to connectionFeedback on the session
+// list and to the header on the terminal page.
 func (m *mobileApp) errorView(c *ui.Context) {
-	if m.needsRecovery() || m.connectionIssue != nil {
-		if m.term == nil {
-			m.connectionFeedback(c)
-		}
-		return
-	}
-	if m.error != "" {
+	if m.error != "" && !m.degraded() {
 		ui.Text(c.Key("connection-status"), m.error).TextColor(c.Theme().Danger).FontSize(14).LineHeight(1.4).Margin(0, 16, 12, 16)
 	}
 }
@@ -790,6 +787,7 @@ func (m *mobileApp) sessionsView(c *ui.Context) {
 			ui.Text(c, "会话").FontSize(17).Bold().PassThrough()
 			ui.Text(c, fmt.Sprint(len(m.sessions))).FontSize(13).TextColor(c.Theme().TextMuted).PassThrough()
 		})
+		m.inboxButton(c)
 		if ui.ButtonBase(c).Label("新建会话").Disabled(m.busy || m.reconnecting || m.connectionIssue != nil).Role(ui.RoleButton).Size(44, 44).Children(func() {
 			if m.busy && !m.reconnecting {
 				ui.Spinner(c).Size(18, 18).TextColor(c.Theme().Accent)
@@ -803,7 +801,7 @@ func (m *mobileApp) sessionsView(c *ui.Context) {
 	ui.Row(c).FillWidth().Height(44).Padding(0, 8, 0, 20).Gap(8).AlignItems(ui.Center).Children(func() {
 		statusColor := colorsOf(c).busy.Mix(colorsOf(c).textMuted, 0.3)
 		status := "桌面已连接"
-		if m.needsRecovery() || m.connectionIssue != nil {
+		if m.degraded() {
 			statusColor, status = colorsOf(c).attention, "桌面连接已中断"
 		}
 		ui.Box(c).Label(status).Size(6, 6).Shrink(0).Radius(3).Background(statusColor)
@@ -819,9 +817,7 @@ func (m *mobileApp) sessionsView(c *ui.Context) {
 	})
 	ui.Scroll(c.Key("mobile-sessions")).Grow(1).MinHeight(0).FillWidth().TrackScroll(&m.scroll).HideScrollbars().Padding(8, 16, 16, 16).Gap(12).Children(func() {
 		m.connectionFeedback(c)
-		if !m.needsRecovery() && m.connectionIssue == nil {
-			m.errorView(c)
-		}
+		m.errorView(c)
 		m.sessionList(c)
 	})
 }
@@ -834,10 +830,6 @@ func (m *mobileApp) terminalView(c *ui.Context) {
 	}
 	m.term.SetInputEnabled(!m.reconnecting && !m.background && (m.stream == nil || m.stream.inputReady()))
 	m.errorView(c)
-	if m.term == nil {
-		c.Invalidate()
-		return
-	}
 	if m.selected.Exited {
 		ui.Text(c, "会话已结束").FontSize(13).Padding(6, 16).TextColor(c.Theme().TextMuted)
 	}
@@ -867,8 +859,22 @@ func (m *mobileApp) terminalView(c *ui.Context) {
 }
 
 func (m *mobileApp) selectionMenu(c *ui.Context, element ui.Element) {
+	if m.selectionMenuTerm != m.term {
+		m.selectionMenuTerm, m.selectionMenuDismissed = m.term, false
+	}
 	anchor, ok := m.term.SelectionAnchor()
 	if !ok {
+		// A new selection gesture temporarily hides its anchor while dragging.
+		m.selectionMenuDismissed = false
+		return
+	}
+	if m.background {
+		m.selectionMenuDismissed = true
+	}
+	if m.selectionMenuDismissed {
+		if element.PressedOutside() {
+			m.term.ClearSelection()
+		}
 		return
 	}
 	bounds, viewport := element.Bounds(), c.Root().Bounds()
@@ -879,15 +885,20 @@ func (m *mobileApp) selectionMenu(c *ui.Context, element ui.Element) {
 	}
 	y = max(0, min(y, viewport.H-48))
 	ui.Overlay(c, func() {
-		ui.Row(c.Key("mobile-selection-menu")).Absolute().Left(x).Top(y).Size(148, 44).KeepFocus().Radius(12).Background(c.Theme().Surface).Shadow(0, 2, 12, 0, ui.RGBA(0, 0, 0, .18)).Children(func() {
+		menu := ui.Row(c.Key("mobile-selection-menu")).Role(ui.RolePopup).Absolute().Left(x).Top(y).Size(148, 44).KeepFocus().Radius(12).Background(c.Theme().Surface).Shadow(0, 2, 12, 0, ui.RGBA(0, 0, 0, .18)).Children(func() {
 			if ui.ButtonBase(c).Label("复制").Role(ui.RoleButton).KeepFocus().Height(44).Grow(1).Children(func() { ui.Text(c, "复制").FontSize(15) }).Clicked() {
 				if text, ok := m.term.SelectedText(); ok {
 					c.WriteClipboard(text)
 				}
+				m.selectionMenuDismissed = true
 			}
 			if ui.ButtonBase(c).Label("全选").Role(ui.RoleButton).KeepFocus().Height(44).Grow(1).Children(func() { ui.Text(c, "全选").FontSize(15) }).Clicked() {
 				m.term.SelectAll()
 			}
 		})
+		if menu.PressedOutside() || menu.OverlayShortcut(0, ui.KeyEscape) {
+			m.selectionMenuDismissed = true
+			m.term.ClearSelection()
+		}
 	})
 }

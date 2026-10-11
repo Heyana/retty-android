@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"bytes"
 	"crypto/rand"
+	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -24,29 +25,35 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"retty/internal/atomicfile"
 )
 
 // Server owns the sessions.
 type Server struct {
-	mu           sync.Mutex
-	agentMu      sync.Mutex // serialize shared-daemon session binding and reports
-	agentToken   string
-	recoveryPath string
-	recovery     map[string]agentResume
-	ending       bool // explicit End All prevents late hooks from recreating records
-	sessions     map[string]*session
-	order        []string
-	layout       json.RawMessage
-	started      time.Time
-	host         HostInfo
-	hostDone     chan struct{}
-	ln           net.Listener
-	exe          string
-	exeTime      time.Time
-	controls     int
-	idleFrom     time.Time
-	quit         chan struct{}
-	quitOnce     sync.Once
+	mu            sync.Mutex
+	agentMu       sync.Mutex // serialize shared-daemon session binding and reports
+	agentToken    string
+	recoveryPath  string
+	recovery      map[string]agentResume
+	ending        bool // explicit End All prevents late hooks from recreating records
+	sessions      map[string]*session
+	order         []string
+	layout        json.RawMessage
+	started       time.Time
+	hostID        string   // computed before serving and never written again
+	host          HostInfo // guarded by mu; filled in once hostDone closes
+	hostDone      chan struct{}
+	ln            net.Listener
+	exe           string
+	exeTime       time.Time
+	controls      int
+	idleFrom      time.Time
+	quit          chan struct{}
+	quitOnce      sync.Once
+	attentionMu   sync.Mutex
+	attentionPath string
+	attentionSeen map[string]string
 }
 
 // idleTimeout is how long a server with no sessions and no app waits
@@ -84,8 +91,8 @@ func Serve() error {
 	}
 	os.Chmod(sock, 0o600)
 	s := &Server{
-		agentToken: agentToken,
-		sessions:   map[string]*session{}, started: time.Now(), ln: ln,
+		agentToken: agentToken, hostID: hostID(deviceID),
+		sessions: map[string]*session{}, started: time.Now(), ln: ln,
 		hostDone: make(chan struct{}), idleFrom: time.Now(), quit: make(chan struct{}),
 	}
 	if err := s.loadRecovery(dir); err != nil {
@@ -93,15 +100,19 @@ func Serve() error {
 		log.Printf("rex: load Agent recovery: %v", err)
 		s.recoveryPath = ""
 	}
+	if err := s.loadAttention(dir); err != nil {
+		log.Printf("rex: load attention receipts: %v", err)
+		s.attentionPath = ""
+	}
 	if b, err := os.ReadFile(filepath.Join(dir, "layout.json")); err == nil && json.Valid(b) {
 		s.layout = b
 	}
 	s.exe, s.exeTime = Executable()
 	go func() {
-		s.host = hostInfo()
-		if s.host.ID == "" {
-			s.host.ID = "installation:" + deviceID
-		}
+		h := hostInfo()
+		s.mu.Lock()
+		s.host = h
+		s.mu.Unlock()
 		close(s.hostDone)
 	}()
 	go s.watchIdle()
@@ -244,6 +255,13 @@ func (s *Server) request(req Request) Response {
 	} else if data != nil {
 		res.Data, _ = json.Marshal(data)
 	}
+	if req.Op == "list" && res.Error == "" {
+		sum := sha256.Sum256(res.Data)
+		res.ETag = hex.EncodeToString(sum[:12])
+		if req.ETag == res.ETag {
+			res.Data = nil
+		}
+	}
 	return res
 }
 
@@ -263,7 +281,11 @@ func (s *Server) do(req Request) (any, error) {
 		case <-s.hostDone:
 		case <-time.After(3 * time.Second):
 		}
-		return Hello{Version: ProtocolVersion, PID: os.Getpid(), Started: s.started, Host: s.host, Exe: s.exe, ExeTime: s.exeTime, AgentRecovery: s.recoveryPath != ""}, nil
+		s.mu.Lock()
+		host := s.host
+		s.mu.Unlock()
+		host.ID = s.hostID
+		return Hello{Version: ProtocolVersion, PID: os.Getpid(), Started: s.started, Host: host, Exe: s.exe, ExeTime: s.exeTime, AgentRecovery: s.recoveryPath != "", Attention: s.attentionPath != ""}, nil
 	case "list":
 		s.mu.Lock()
 		all := make([]*session, 0, len(s.order))
@@ -274,8 +296,13 @@ func (s *Server) do(req Request) (any, error) {
 		infos := make([]SessionInfo, len(all))
 		for i, ss := range all {
 			infos[i] = ss.info()
+			s.attentionMu.Lock()
+			infos[i].AttentionSeen = s.attentionSeen[ss.id]
+			s.attentionMu.Unlock()
 		}
 		return infos, nil
+	case "markAttention":
+		return nil, s.markAttention(req.SID, req.Notice)
 	case "create":
 		s.agentMu.Lock()
 		defer s.agentMu.Unlock()
@@ -297,71 +324,51 @@ func (s *Server) do(req Request) (any, error) {
 		s.mu.Unlock()
 		return ss.info(), nil
 	case "kill":
+		// Forget and unlist the session under agentMu, so a racing hook cannot
+		// bind to it, but end it outside: ending may wait a second.
 		s.agentMu.Lock()
-		defer s.agentMu.Unlock()
 		if err := s.forgetRecovery(req.SID); err != nil {
+			s.agentMu.Unlock()
 			return nil, err
 		}
-		ss, err := s.session(req.SID)
-		if err != nil {
-			return nil, nil // already gone
-		}
-		ss.kill()
 		s.mu.Lock()
+		ss := s.sessions[req.SID]
 		delete(s.sessions, req.SID)
 		s.order = slices.DeleteFunc(s.order, func(id string) bool { return id == req.SID })
 		if len(s.sessions) == 0 {
 			s.idleFrom = time.Now()
 		}
 		s.mu.Unlock()
+		s.agentMu.Unlock()
+		if ss != nil {
+			ss.kill()
+		}
 		return nil, nil
 	case "restoreAgent":
 		return s.restoreAgent(req)
-	case "resize":
+	case "resize", "lockedResize", "unlockSize", "renewSize", "resync", "clear":
 		ss, err := s.session(req.SID)
 		if err != nil {
 			return nil, err
 		}
-		ss.resize(req.Cols, req.Rows)
-		return nil, nil
-	case "lockedResize":
-		ss, err := s.session(req.SID)
-		if err != nil {
-			return nil, err
+		switch req.Op {
+		case "resize":
+			ss.resize(req.Cols, req.Rows)
+		case "lockedResize":
+			if req.Owner == "" || !ss.lockedResize(req.Owner, req.Cols, req.Rows) {
+				return nil, errSizeUnlocked
+			}
+		case "unlockSize":
+			ss.unlockSizeOwned(req.Owner, req.Cols, req.Rows)
+		case "renewSize":
+			if !ss.renewSizeLock(req.Owner) {
+				return nil, errSizeUnlocked
+			}
+		case "resync":
+			ss.resend(true)
+		case "clear":
+			ss.clear()
 		}
-		if req.Owner == "" || !ss.lockedResize(req.Owner, req.Cols, req.Rows) {
-			return nil, errSizeUnlocked
-		}
-		return nil, nil
-	case "unlockSize":
-		ss, err := s.session(req.SID)
-		if err != nil {
-			return nil, err
-		}
-		ss.unlockSizeOwned(req.Owner, req.Cols, req.Rows)
-		return nil, nil
-	case "renewSize":
-		ss, err := s.session(req.SID)
-		if err != nil {
-			return nil, err
-		}
-		if !ss.renewSizeLock(req.Owner) {
-			return nil, errSizeUnlocked
-		}
-		return nil, nil
-	case "resync":
-		ss, err := s.session(req.SID)
-		if err != nil {
-			return nil, err
-		}
-		ss.resend(true)
-		return nil, nil
-	case "clear":
-		ss, err := s.session(req.SID)
-		if err != nil {
-			return nil, err
-		}
-		ss.clear()
 		return nil, nil
 	case "agentEvent":
 		return nil, s.reportAgent(req)
@@ -381,11 +388,7 @@ func (s *Server) do(req Request) (any, error) {
 		s.mu.Lock()
 		s.layout = l
 		s.mu.Unlock()
-		path := filepath.Join(Dir(), "layout.json")
-		tmp := path + ".tmp"
-		if err := os.WriteFile(tmp, l, 0o600); err == nil {
-			os.Rename(tmp, path)
-		}
+		atomicfile.Write(filepath.Join(Dir(), "layout.json"), l)
 		return nil, nil
 	case "shutdown":
 		s.agentMu.Lock()
@@ -413,27 +416,40 @@ func newID() string {
 	return hex.EncodeToString(b[:])
 }
 
-// hostInfo describes this machine; it may take a second.
+// commandOutput is the trimmed output of a command, empty when it fails.
+func commandOutput(name string, args ...string) string {
+	b, err := exec.Command(name, args...).Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(b))
+}
+
+// hostID identifies this machine, or this installation when the machine has
+// no identity. It is cheap, so the server computes it before serving: hello
+// and attention receipts must agree on it from the first request.
+func hostID(deviceID string) string {
+	if runtime.GOOS == "darwin" {
+		for _, line := range strings.Split(commandOutput("ioreg", "-rd1", "-c", "IOPlatformExpertDevice"), "\n") {
+			if _, value, ok := strings.Cut(line, `"IOPlatformUUID" = `); ok {
+				return deviceFingerprint(strings.Trim(value, `"`))
+			}
+		}
+	} else if data, err := os.ReadFile("/etc/machine-id"); err == nil {
+		return deviceFingerprint(string(data))
+	}
+	return "installation:" + deviceID
+}
+
+// hostInfo describes this machine apart from its ID; it may take a second.
 func hostInfo() HostInfo {
 	h := HostInfo{}
 	if u, err := user.Current(); err == nil {
 		h.User = u.Username
 		h.Home = u.HomeDir
 	}
-	out := func(name string, args ...string) string {
-		b, err := exec.Command(name, args...).Output()
-		if err != nil {
-			return ""
-		}
-		return strings.TrimSpace(string(b))
-	}
+	out := commandOutput
 	if runtime.GOOS == "darwin" {
-		for _, line := range strings.Split(out("ioreg", "-rd1", "-c", "IOPlatformExpertDevice"), "\n") {
-			if _, value, ok := strings.Cut(line, `"IOPlatformUUID" = `); ok {
-				h.ID = deviceFingerprint(strings.Trim(value, `"`))
-				break
-			}
-		}
 		h.Name = out("scutil", "--get", "ComputerName")
 		h.OS = "macOS " + out("sw_vers", "-productVersion")
 		h.Chip = sysctlString("machdep.cpu.brand_string")
@@ -454,9 +470,6 @@ func hostInfo() HostInfo {
 			h.Model = sysctlString("hw.model")
 		}
 	} else {
-		if data, err := os.ReadFile("/etc/machine-id"); err == nil {
-			h.ID = deviceFingerprint(string(data))
-		}
 		h.Name, _ = os.Hostname()
 		h.OS = runtime.GOOS
 		if b, err := os.ReadFile("/etc/os-release"); err == nil {

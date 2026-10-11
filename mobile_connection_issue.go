@@ -37,12 +37,24 @@ func (m *mobileApp) needsRecovery() bool {
 	return m.reconnecting || m.stream != nil && !m.stream.inputReady()
 }
 
+// degraded tells that the connection is recovering or has a reported issue,
+// so sessions cannot be opened yet.
+func (m *mobileApp) degraded() bool {
+	return m.needsRecovery() || m.connectionIssue != nil
+}
+
+// manualIssue tells that a connection issue waits for the user instead of
+// automatic retries.
+func (m *mobileApp) manualIssue() bool {
+	return m.connectionIssue != nil && !m.connectionIssue.automatic
+}
+
 func (m *mobileApp) recoveryAnimating() bool {
-	return !m.background && m.needsRecovery() && (m.connectionIssue == nil || m.connectionIssue.automatic)
+	return !m.background && m.needsRecovery() && !m.manualIssue()
 }
 
 func (m *mobileApp) recoveryStatus() string {
-	if m.connectionIssue != nil && !m.connectionIssue.automatic {
+	if m.manualIssue() {
 		return m.connectionIssue.title
 	}
 	if !m.reconnecting {
@@ -54,7 +66,7 @@ func (m *mobileApp) recoveryStatus() string {
 // Inline feedback is used on the home/session pages. The terminal keeps its
 // viewport unchanged and exposes the same actions through its fixed header.
 func (m *mobileApp) connectionFeedback(c *ui.Context) {
-	if m.connectionIssue == nil && !m.needsRecovery() {
+	if !m.degraded() {
 		return
 	}
 	title, body := "正在重连", "恢复连接后可打开会话"

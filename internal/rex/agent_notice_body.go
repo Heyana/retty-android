@@ -10,6 +10,11 @@ import (
 // AgentNoticeBody names the task instead of displaying project paths or
 // generic navigation instructions. Local notifications and APNs share it.
 func AgentNoticeBody(dir string, session SessionInfo) string {
+	if agents.Finished(session.Agent.State) {
+		if summary := agents.SummaryText(session.Agent.Summary); summary != "" {
+			return summary
+		}
+	}
 	if session.Agent.Source == ProgramStatusSource {
 		if msg := programStatusText(session.Agent.Message); msg != "" {
 			return msg
@@ -19,7 +24,7 @@ func AgentNoticeBody(dir string, session SessionInfo) string {
 		}
 	}
 	task := ""
-	if session.Agent.Source != ProgramStatusSource {
+	if dir != "" && session.Agent.Source != ProgramStatusSource {
 		task = agents.ReadTask(dir, session.Agent.ID, session.Agent.SessionID, session.Agent.Updated)
 	}
 	if task == "" {

@@ -47,6 +47,10 @@ type desktopConnections struct {
 	historySelection     map[string]bool
 	recentSessions       []mobileRecentSession
 	incoming             []remote.ConnectedDevice
+
+	// written holds the records last written, by key, so that saving
+	// skips those unchanged; only the storage goroutine uses it.
+	written map[string]string
 }
 
 func (a *App) hasDesktopConnections() bool {
@@ -135,8 +139,18 @@ func (a *App) desktopDispatcher() func(func()) {
 		}
 	}
 }
-func disposeDesktopTransport(client *rex.Client, tunnel func()) {
-	remote.CloseConnection(client, tunnel)
+
+// stop ends the host's connection attempt, retry and watcher. Replies of
+// the old generation are then ignored.
+func (h *desktopHost) stop() {
+	h.generation++
+	if h.retryTimer != nil {
+		h.retryTimer.Stop()
+		h.retryTimer = nil
+	}
+	if h.cancel != nil {
+		h.cancel()
+	}
 }
 func desktopLayoutKey(h *desktopHost) string {
 	if h.recent.ID != "" {
@@ -145,13 +159,9 @@ func desktopLayoutKey(h *desktopHost) string {
 	return h.key
 }
 func (a *App) desktopInputEnabled(h *desktopHost, enabled bool) {
-	for _, tab := range a.tabs {
-		if tab.Host == h {
-			for _, p := range tab.panes() {
-				if p.term != nil {
-					p.term.SetInputEnabled(enabled && (p.remoteView == nil || a.activeRemote == p && !p.remoteYielded && p.remoteView.inputReady()))
-				}
-			}
+	for p := range a.hostPanes(h) {
+		if p.term != nil {
+			p.term.SetInputEnabled(enabled && (p.remoteView == nil || a.activeRemote == p && !p.remoteYielded && p.remoteView.inputReady()))
 		}
 	}
 }
@@ -174,18 +184,9 @@ func (a *App) loadDesktopHistory() {
 	store, win, update := a.desktops.store, a.win, a.desktopDispatcher()
 	a.desktopStorage <- func() {
 		history := readDesktopHistory(store)
-		var recentSessions []mobileRecentSession
-		if data, err := store.Get("recent-sessions"); err == nil {
-			json.Unmarshal(data, &recentSessions)
-		}
-		var incoming []remote.ConnectedDevice
-		if data, err := store.Get("incoming-devices"); err == nil {
-			json.Unmarshal(data, &incoming)
-		}
-		var layouts map[string]savedLayout
-		if data, err := store.Get("desktop-layouts"); err == nil {
-			json.Unmarshal(data, &layouts)
-		}
+		recentSessions := loadRecord[[]mobileRecentSession](store, "recent-sessions")
+		incoming := loadRecord[[]remote.ConnectedDevice](store, "incoming-devices")
+		layouts := loadRecord[map[string]savedLayout](store, "desktop-layouts")
 		update(func() {
 			if a.win != win || a.quitting {
 				return
@@ -221,24 +222,32 @@ func (a *App) saveDesktopHistory() {
 		}
 		layouts[desktopLayoutKey(h)] = layout
 	}
-	history = mergeDesktopHistory(history, nil)
-	data, _ := json.Marshal(layouts)
-	recentSessions, _ := json.Marshal(a.desktops.recentSessions)
-	incoming, _ := json.Marshal(a.desktops.incoming)
-	store, update := a.desktops.store, a.desktopDispatcher()
+	// Every change of the layout saves, and each write syncs the store to
+	// disk: write only the records that changed since the last write.
+	records := map[string]any{
+		"history":          mergeDesktopHistory(history, nil),
+		"desktop-layouts":  layouts,
+		"recent-sessions":  a.desktops.recentSessions,
+		"incoming-devices": a.desktops.incoming,
+	}
+	data := map[string][]byte{}
+	for key, record := range records {
+		data[key], _ = json.Marshal(record)
+	}
+	if a.desktops.written == nil {
+		a.desktops.written = map[string]string{}
+	}
+	store, written, update := a.desktops.store, a.desktops.written, a.desktopDispatcher()
 	a.desktopStorage <- func() {
-		err := writeDesktopHistory(store, history)
-		if err == nil {
-			err = store.Set("desktop-layouts", data)
-		}
-		if err == nil {
-			err = store.Set("recent-sessions", recentSessions)
-		}
-		if err == nil {
-			err = store.Set("incoming-devices", incoming)
-		}
-		if err != nil {
-			update(func() { a.desktops.err = "无法保存最近连接，请重试。" })
+		for _, key := range []string{"history", "desktop-layouts", "recent-sessions", "incoming-devices"} {
+			if written[key] == string(data[key]) {
+				continue
+			}
+			if err := store.Set(key, data[key]); err != nil {
+				update(func() { a.desktops.err = "无法保存最近连接，请重试。" })
+				return
+			}
+			written[key] = string(data[key])
 		}
 	}
 }
@@ -273,12 +282,9 @@ func (a *App) connectDesktop(h *desktopHost) {
 	if h.busy || h.connected() {
 		return
 	}
-	if h.cancel != nil {
-		h.cancel()
-	}
-	disposeDesktopTransport(h.client, h.tunnel)
+	h.stop()
+	remote.CloseConnection(h.client, h.tunnel)
 	h.client, h.tunnel = nil, nil
-	h.generation++
 	h.qualityProbeBusy = false
 	h.qualityProbeAt = time.Time{}
 	generation := h.generation
@@ -299,23 +305,20 @@ func (a *App) connectDesktop(h *desktopHost) {
 	go func() {
 		deadline, stop := context.WithTimeout(ctx, 45*time.Second)
 		defer stop()
-		client, tunnel, hello, infos, err := remote.OpenConnectionWithQuality(deadline, link, rex.DeviceInfo{Name: deviceName, OS: device.System}, quality)
+		client, tunnel, hello, infos, err := remote.OpenConnection(deadline, link, rex.DeviceInfo{Name: deviceName, OS: device.System}, nil, quality)
 		update(func() {
 			if h.generation != generation || a.quitting {
-				disposeDesktopTransport(client, tunnel)
+				remote.CloseConnection(client, tunnel)
 				return
 			}
 			h.busy = false
 			if err != nil {
-				disposeDesktopTransport(client, tunnel)
-				h.err = connectionIssueFor(err).body
-				if h.retryAttempt > 0 && connectionIssueFor(err).automatic {
-					a.scheduleDesktopRetry(h, update)
-				}
+				remote.CloseConnection(client, tunnel)
+				a.failDesktop(h, err, h.retryAttempt > 0, update)
 				return
 			}
 			if hello.Host.ID != "" && hello.Host.ID == a.hello.Host.ID {
-				disposeDesktopTransport(client, tunnel)
+				remote.CloseConnection(client, tunnel)
 				h.err = "这是此电脑，请使用本地标签页。"
 				return
 			}
@@ -324,7 +327,7 @@ func (a *App) connectDesktop(h *desktopHost) {
 				if other != h && hello.Host.ID != "" && sameDesktop(other.recent, desktopRecent{ID: hello.Host.ID, Name: hello.Host.Name}) {
 					a.desktops.selected = other
 					other.link, other.recent.Link = h.link, h.link
-					disposeDesktopTransport(client, tunnel)
+					remote.CloseConnection(client, tunnel)
 					a.desktops.hosts = slices.DeleteFunc(a.desktops.hosts, func(v *desktopHost) bool { return v == h })
 					if !other.connected() {
 						a.connectDesktop(other)
@@ -402,10 +405,7 @@ func (a *App) recoverDesktop(ctx context.Context, h *desktopHost, client *rex.Cl
 			}
 			h.busy = false
 			if err != nil {
-				h.err = connectionIssueFor(err).body
-				if connectionIssueFor(err).automatic {
-					a.scheduleDesktopRetry(h, update)
-				}
+				a.failDesktop(h, err, true, update)
 				return
 			}
 			h.err = ""
@@ -421,6 +421,16 @@ func (a *App) recoverDesktop(ctx context.Context, h *desktopHost, client *rex.Cl
 			go a.pollDesktop(ctx, h, h.client, generation, update)
 		})
 	}()
+}
+
+// failDesktop tells why a host could not connect, and retries when the
+// failure may pass and retry allows.
+func (a *App) failDesktop(h *desktopHost, err error, retry bool, update func(func())) {
+	issue := connectionIssueFor(err)
+	h.err = issue.body
+	if retry && issue.automatic {
+		a.scheduleDesktopRetry(h, update)
+	}
 }
 func (a *App) scheduleDesktopRetry(h *desktopHost, update func(func())) {
 	generation := h.generation
@@ -439,15 +449,11 @@ func (a *App) scheduleDesktopRetry(h *desktopHost, update func(func())) {
 	})
 }
 func (a *App) reattachDesktopTabs(h *desktopHost) {
-	for _, t := range a.tabs {
-		if t.Host == h {
-			for _, p := range t.panes() {
-				if in, ok := desktopSession(h, p.SID); ok {
-					a.reattachDesktopPane(p, in)
-				} else {
-					p.info.Exited = true
-				}
-			}
+	for p := range a.hostPanes(h) {
+		if in, ok := desktopSession(h, p.SID); ok {
+			a.reattachDesktopPane(p, in)
+		} else {
+			p.info.Exited = true
 		}
 	}
 }
@@ -473,16 +479,9 @@ func (a *App) reattachDesktopPane(p *Pane, in rex.SessionInfo) {
 func (a *App) disconnectDesktop(h *desktopHost) {
 	h.qualityProbeBusy = false
 	h.pendingSession = ""
-	h.generation++
-	if h.retryTimer != nil {
-		h.retryTimer.Stop()
-		h.retryTimer = nil
-	}
+	h.stop()
 	h.retryAttempt = 0
 	h.recoverySince = time.Time{}
-	if h.cancel != nil {
-		h.cancel()
-	}
 	h.busy, h.creating = false, false
 	h.err = ""
 	for _, t := range slices.Clone(a.tabs) {
@@ -497,15 +496,8 @@ func (a *App) disconnectDesktop(h *desktopHost) {
 }
 func (a *App) closeDesktopConnections() {
 	for _, h := range a.desktops.hosts {
-		h.generation++
-		if h.retryTimer != nil {
-			h.retryTimer.Stop()
-			h.retryTimer = nil
-		}
-		if h.cancel != nil {
-			h.cancel()
-		}
-		disposeDesktopTransport(h.client, h.tunnel)
+		h.stop()
+		remote.CloseConnection(h.client, h.tunnel)
 		h.client, h.tunnel = nil, nil
 	}
 }
@@ -519,26 +511,19 @@ func (a *App) openDesktopSession(h *desktopHost, in rex.SessionInfo, selectIt bo
 		a.desktops.recentSessions = mergeRecentSessions([]mobileRecentSession{{Desktop: h.key, Session: in.ID, Title: name, Program: sessionProgramName(in)}}, a.desktops.recentSessions)
 		a.saveDesktopHistory()
 	}
-	for i, t := range a.tabs {
-		if t.Host == h {
-			for _, p := range t.panes() {
-				if p.SID == in.ID {
-					if selectIt {
-						t.setFocus(p)
-						a.selectTab(i)
-						a.finishDesktopDialog()
-					}
-					return
-				}
+	for p := range a.hostPanes(h) {
+		if p.SID == in.ID {
+			if selectIt {
+				p.Tab.setFocus(p)
+				a.selectTab(slices.Index(a.tabs, p.Tab))
+				a.finishDesktopDialog()
 			}
+			return
 		}
 	}
-	t := &Tab{ID: a.id(), Host: h}
 	p := &Pane{ID: a.id(), SID: in.ID, host: h, info: in, startDir: in.Dir}
-	t.Root = &Node{ID: a.id(), Pane: p}
-	p.Tab, p.Node = t, t.Root
-	t.setFocus(p)
 	a.attach(p, in.Cols, in.Rows)
+	t := a.singlePaneTab(p)
 	at := len(a.tabs)
 	if selectIt {
 		at = min(a.active+1, len(a.tabs))
@@ -636,21 +621,11 @@ func (a *App) restartDesktopPane(p *Pane) {
 			if p.closed {
 				return
 			}
-			replacement := &Pane{ID: a.id(), SID: in.ID, host: h, info: in, startDir: dir, Tab: p.Tab, Node: p.Node}
-			p.closed = true
-			a.closePaneTerminal(p)
-			a.closeAgentNotice(p.noticeKey())
+			replacement := &Pane{ID: a.id(), SID: in.ID, host: h, info: in, startDir: dir}
+			a.endPane(p, true)
 			go client.Kill(p.SID)
-			p.Node.Pane = replacement
-			t := p.Tab
-			if t.Zoom == p {
-				t.Zoom = replacement
-			}
-			t.recent = slices.DeleteFunc(t.recent, func(q *Pane) bool { return q == p })
 			a.attach(replacement, in.Cols, in.Rows)
-			t.setFocus(replacement)
-			a.focusReq = replacement
-			a.changed()
+			a.replacePane(p, replacement)
 		})
 	}()
 }
@@ -710,12 +685,8 @@ func (a *App) restoreDesktopLayout(h *desktopHost) {
 	saved := h.layout
 	h.layout = savedLayout{}
 	shown := map[string]bool{}
-	for _, tab := range a.tabs {
-		if tab.Host == h {
-			for _, p := range tab.panes() {
-				shown[p.SID] = true
-			}
-		}
+	for p := range a.hostPanes(h) {
+		shown[p.SID] = true
 	}
 	var load func(*savedNode, *Tab, *Node) *Node
 	load = func(s *savedNode, t *Tab, parent *Node) *Node {

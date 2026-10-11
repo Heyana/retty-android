@@ -259,7 +259,7 @@ func TestDesktopNotificationKeysAndLocalPollIsolation(t *testing.T) {
 	lt, rt := &Tab{Root: &Node{Pane: local}, Focus: local}, &Tab{Host: host, Root: &Node{Pane: remotePane}, Focus: remotePane}
 	local.Tab, remotePane.Tab = lt, rt
 	closed := 0
-	a := &App{tabs: []*Tab{lt, rt}, agentNotices: map[string]func(){remotePane.noticeKey(): func() { closed++ }}}
+	a := &App{tabs: []*Tab{lt, rt}, agentNotices: map[string]agentNotice{remotePane.noticeKey(): {close: func() { closed++ }}}}
 	a.apply(map[string]rex.SessionInfo{"same": local.info})
 	if remotePane.info.Dir != "/remote" || closed != 0 {
 		t.Fatal("local poll overwrote remote state or dismissed remote notice")
@@ -414,7 +414,7 @@ func TestDesktopTailcatConnectAndReconnect(t *testing.T) {
 	desktop, socket := desktopFixtureClient(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	defer cancel()
-	bridge, err := remote.Start(ctx, socket)
+	bridge, err := remote.Start(ctx, socket, remote.Options{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -565,7 +565,8 @@ func TestSharedDesktopHistoryStore(t *testing.T) {
 	dir := t.TempDir()
 	store := &desktopConnectionStore{path: filepath.Join(dir, "connections.json")}
 	history := []desktopRecent{{Link: recentTestLink(), Name: "Fixture", ID: "machine:fixture"}}
-	if err := writeDesktopHistory(store, history); err != nil {
+	data, _ := json.Marshal(history)
+	if err := store.Set("history", data); err != nil {
 		t.Fatal(err)
 	}
 	first := readDesktopHistory(store)
