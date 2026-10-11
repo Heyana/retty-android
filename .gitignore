@@ -1,4 +1,5 @@
 /build/
+mygo-update.key
 /.mygo/
 mygo_windows_*.syso
 /internal/terminal/internal/vt/ios/*.a

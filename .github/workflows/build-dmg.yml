@@ -19,6 +19,8 @@ on:
       notarized:
         value: ${{ jobs.build-dmg.outputs.notarized }}
     secrets:
+      MYGO_UPDATER_PRIVATE_KEY:
+        required: false
       MACOS_CERTIFICATE_P12:
         required: false
       MACOS_CERTIFICATE_PASSWORD:
@@ -105,59 +107,76 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Build production app and universal DMG
+      - name: Test update release validation
+        run: go test ./tools/verifyupdates
+
+      - name: Build notarized apps and signed updates
+        shell: bash
         env:
           SIGNING_IDENTITY: ${{ steps.signing.outputs.identity }}
-        run: env -u MYGO_INSPECTOR go tool mygo build -platform darwin/universal -sign "$SIGNING_IDENTITY" .
+          SIGNING_ENABLED: ${{ steps.signing.outputs.enabled }}
+          REQUIRE_NOTARIZATION: ${{ inputs.require-notarization || false }}
+          MYGO_UPDATER_PRIVATE_KEY: ${{ secrets.MYGO_UPDATER_PRIVATE_KEY }}
+          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
+          NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [[ "$REQUIRE_NOTARIZATION" == true && -z "$MYGO_UPDATER_PRIVATE_KEY" ]]; then
+            echo '::error::Release requires MYGO_UPDATER_PRIVATE_KEY for signed app updates.'
+            exit 1
+          fi
+          cp mygo.json "$RUNNER_TEMP/retty-mygo.json"
+          trap 'cp "$RUNNER_TEMP/retty-mygo.json" mygo.json' EXIT
+          if [[ "$SIGNING_ENABLED" == true ]]; then
+            xcrun notarytool store-credentials RettyActions \
+              --key "$RUNNER_TEMP/retty-signing/notary-key.p8" \
+              --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
+              --keychain "$RUNNER_TEMP/retty-signing/signing.keychain-db"
+            python3 - <<'PYCONFIG'
+          import json, os
+          from pathlib import Path
+          path = Path('mygo.json')
+          config = json.loads(path.read_text())
+          config['macos']['notarize'] = {
+              'keychainProfile': 'RettyActions',
+              'keychain': str(Path(os.environ['RUNNER_TEMP']) / 'retty-signing/signing.keychain-db'),
+          }
+          path.write_text(json.dumps(config))
+          PYCONFIG
+          fi
+          # MyGo staples each app BEFORE signing its update archive and deltas.
+          env -u MYGO_INSPECTOR go tool mygo build \
+            -platform darwin/universal,darwin/arm64,darwin/amd64 -sign "$SIGNING_IDENTITY" . \
+            2>&1 | tee "$RUNNER_TEMP/retty-build.log"
+          if [[ -n "$MYGO_UPDATER_PRIVATE_KEY" ]]; then
+            go run ./tools/verifyupdates -dir build
+          fi
 
-      - name: Notarize and staple Apple tickets
+      - name: Verify Apple tickets and Gatekeeper
         id: notarize
         if: steps.signing.outputs.enabled == 'true'
         shell: bash
-        env:
-          NOTARY_KEY_ID: ${{ secrets.MACOS_NOTARY_KEY_ID }}
-          NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
         run: |
           set -euo pipefail
-          folder="$RUNNER_TEMP/retty-notary"
-          mkdir -p "$folder"
-          for image in build/darwin-universal/*.dmg; do
-            submit_status=0
-            xcrun notarytool submit "$image" --key "$RUNNER_TEMP/retty-signing/notary-key.p8" \
-              --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" \
-              --wait --timeout 20m --output-format json > "$folder/submission.json" || submit_status=$?
-            submission_id=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("id", ""))' "$folder/submission.json")
-            status=$(python3 -c 'import json, sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$folder/submission.json")
-            if [[ -n "$submission_id" ]]; then
-              xcrun notarytool log "$submission_id" --key "$RUNNER_TEMP/retty-signing/notary-key.p8" \
-                --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER_ID" "$folder/log.json" || true
-            fi
-            if [[ "$submit_status" -ne 0 || "$status" != Accepted ]]; then
-              echo "::error::Apple notarization did not complete successfully (status=$status, submission=$submission_id). See the macOS-notarization artifact for diagnostics."
-              exit 1
-            fi
-            python3 - <<'PY'
-          import json, os
-          from pathlib import Path
-          result = json.loads((Path(os.environ['RUNNER_TEMP']) / 'retty-notary/submission.json').read_text())
-          print(f'Notarization accepted: {result["id"]}')
-          PY
-            xcrun stapler staple "$image"
-            xcrun stapler validate "$image"
-            spctl --assess --type open --context context:primary-signature --verbose=4 "$image"
+          for target in darwin-universal darwin-arm64 darwin-amd64; do
+            app="build/$target/Retty.app"
+            xcrun stapler validate "$app"
+            spctl --assess --type execute --verbose=4 "$app"
+            for image in build/"$target"/*.dmg; do
+              xcrun stapler validate "$image"
+              spctl --assess --type open --context context:primary-signature --verbose=4 "$image"
+            done
           done
-          xcrun stapler staple build/darwin-universal/Retty.app
-          xcrun stapler validate build/darwin-universal/Retty.app
-          spctl --assess --type execute --verbose=4 build/darwin-universal/Retty.app
           echo 'notarized=true' >> "$GITHUB_OUTPUT"
-          echo 'macOS: Developer ID signed, Apple notarized and Gatekeeper verified.' >> "$GITHUB_STEP_SUMMARY"
+          echo 'macOS: Developer ID signed, Apple notarized and Gatekeeper verified; update archives include stapled tickets.' >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Upload Apple notarization diagnostics
-        if: always() && steps.signing.outputs.enabled == 'true'
+      - name: Upload build and notarization diagnostics
+        if: always()
         uses: actions/upload-artifact@v7
         with:
           name: macOS-notarization
-          path: ${{ runner.temp }}/retty-notary/*.json
+          path: ${{ runner.temp }}/retty-build.log
           if-no-files-found: ignore
           retention-days: 14
 
@@ -194,6 +213,26 @@ jobs:
           path: |
             build/darwin-universal/*.dmg
             build/darwin-universal/*.dmg.sha256
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 14
+
+      - name: Collect signed app updates
+        if: ${{ hashFiles('build/darwin-universal/update-*.json') != '' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p build/updates
+          cp build/darwin-*/*.tar.gz build/darwin-*/*.delta build/darwin-*/update-*.json build/updates/
+          go run ./tools/verifyupdates -dir build/updates -flat
+
+      - name: Upload signed app updates
+        if: ${{ hashFiles('build/darwin-universal/update-*.json') != '' }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: Retty-macos-updates
+          path: build/updates/*
           if-no-files-found: error
           compression-level: 0
           retention-days: 14

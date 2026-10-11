@@ -60,6 +60,7 @@ var (
 var paletteCommands = []*command{
 	&cmdFiles,
 	&cmdSettings,
+	&cmdCheckUpdates,
 	&cmdNewTab, &cmdSplitRight, &cmdSplitDown, &cmdZoom, &cmdEqualize, &cmdClosePane, &cmdCloseTab,
 	&cmdNextTab, &cmdPrevTab, &cmdRenameTab,
 	&cmdFocusLeft, &cmdFocusRight, &cmdFocusUp, &cmdFocusDown,
@@ -108,6 +109,7 @@ func (a *App) menu() *mygo.Menu {
 	return mygo.NewMenu([]*mygo.MenuItem{
 		{Role: mygo.RoleAppMenu, Submenu: []*mygo.MenuItem{
 			{Role: mygo.RoleAbout},
+			item(&cmdCheckUpdates),
 			mygo.Separator(),
 			item(&cmdSettings),
 			mygo.Separator(),
@@ -181,6 +183,11 @@ func (a *App) do(fn func()) {
 // run runs a command of the menus, on the main thread. New Tab opens the
 // window again when it was closed.
 func (a *App) run(cmd *command) {
+	// The updater has its own window, even after the terminal window closes.
+	if cmd == &cmdCheckUpdates {
+		cmd.Run(a)
+		return
+	}
 	if a.win == nil {
 		if cmd == &cmdNewTab || cmd == &cmdSettings {
 			mygo.RunOnMain(func() {

@@ -55,6 +55,7 @@ type mobileApp struct {
 	navigation                         *ui.Router
 	navigationPage                     string
 	keyboardMore                       bool
+	voice                              mobileVoice
 	background                         bool
 	presence                           map[string]desktopPresence
 	presenceCancel                     context.CancelFunc
@@ -214,6 +215,7 @@ func (m *mobileApp) save(key string, data []byte, failed func()) {
 }
 
 func (m *mobileApp) detach() {
+	m.cancelSpeech(true)
 	m.releaseSizeLock()
 	m.clearKeyboardModifiers()
 	m.cancelImagePaste()
@@ -851,6 +853,8 @@ func (m *mobileApp) terminalView(c *ui.Context) {
 		c.Blur()
 	}
 	m.selectionMenu(c, element)
+	m.voiceView(c, element)
+	m.voiceOverlay(c, element.Focused())
 }
 
 func (m *mobileApp) selectionMenu(c *ui.Context, element ui.Element) {

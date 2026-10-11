@@ -94,6 +94,18 @@ GOWORK=off CGO_ENABLED=0 RETTY_CLI_E2E=1 go test -tags retty_cli \
 
 ## 桌面生产构建
 
+### 桌面自动更新
+
+Retty 使用 MyGo 原生 updater 插件。菜单 **Retty → 检查更新…** 和命令面板均可打开更新窗口；默认启动约 10 秒后检查一次，之后每天检查，发现新版本时显示更新说明。下载、验签、安装、跳过版本和重新启动均由 MyGo 处理。应用重启仍走普通退出流程，只保存布局并脱离终端连接，不结束会话服务、推送 worker 或 Agent 任务。后台服务、CLI hook 和 iOS 不初始化 updater。
+
+`mygo.json.updates` 固定 GitHub 来源 `daodao97/retty` 和 Ed25519 公钥。私钥保存在 `~/Documents/Retty-签名与发布备份/MyGo-自动更新/mygo-update.key`，GitHub Actions Secret 为 `MYGO_UPDATER_PRIVATE_KEY`；配套 README 说明恢复方法。不要重新生成或替换密钥，否则已有应用会拒绝新更新。
+
+发布新版本时更新 `mygo.json.version`，并在 `CHANGELOG.md` 中加入对应的 `## <版本>` 更新说明。推送匹配的 `v<版本>` 标签，或运行现有 Release 工作流。Build macOS DMG 构建 universal、arm64、amd64 三个平台，由 MyGo 使用临时 Keychain profile 完成 Developer ID 签名、公证和 stapling，**再**生成签名更新 archive 和增量包；发布阶段验证所有更新签名、URL、版本、大小及完整资产列表。
+
+Release 会同时发布通用 DMG、三个 `update-darwin-*.json`、对应 `.tar.gz` 和可用的 `.delta`。增量包由 MyGo 从已发布的最多三个历史版本生成，失败时客户端回退到完整包。只推送 main 产生 Actions 构建产物，不会向用户发布更新；GitHub Release 发布为 latest 后生效。当前已有的 0.1.1 Release 不含 updater 清单，首次使用需先安装接入 updater 的 0.1.2 或后续版本，以后即可在应用内更新。iOS 继续通过 TestFlight/App Store 更新。
+
+本地仅验证签名更新包时，可读取备份私钥到 `MYGO_UPDATER_PRIVATE_KEY` 后运行生产构建；私钥本身不要写进命令、配置、日志或仓库。构建完成运行 `GOWORK=off go run ./tools/verifyupdates -dir build`，确认三个平台的更新签名和资产。此检查不会发布或安装应用。
+
 ### 原生应用图标
 
 选定的深色底、薄荷绿 `>_` 终端图案保存在 `assets/branding/retty-source.png`，生成提示词保存在同目录的 `retty-source.prompt.txt`。修改母图后执行：
@@ -314,7 +326,7 @@ API key 为 individual 类型时，登录使用 `--key-type individual` 并省�
 
 `ExportReport.json` 必须通过分发签名、App Store profile、生产推送权限及符号检查；工作流额外确认 profile 包含实际分发签名证书、禁用权限没有链接进 IPA、包与发布清单一致。`BuildReport.json` 检查的是 archive 中的开发签名，不能代替分发检查。TestFlight 分组需要显式指定，流程不会默认通知测试者或提交 beta/App Store 审核。
 
-`ios.capabilities` 仅启用 `camera`，用于扫码。MyGo 不编译闲置的位置、麦克风、照片授权和 Face ID 接口，普通 Keychain 存储不引用生物识别接口；因此 Retty 只需相机用途说明。通知权限仍由用户主动开启。若新增受保护功能，需同步启用对应 capability 并填写实际用途说明。
+`ios.capabilities` 启用 `camera`（扫码）、`microphone` 和 `speech`（按住说话转文字），并提供对应用途说明。MyGo 不编译闲置的位置、照片授权和 Face ID 接口，普通 Keychain 存储不引用生物识别接口。通知权限仍由用户主动开启。若新增受保护功能，需同步启用对应 capability 并填写实际用途说明。
 
 Retty 的 Tailcat 隧道包含 Apple 系统之外的加密实现。目前省略两个出口加密键，上传后在 App Store Connect 如实完成加密问卷。不要仅为了通过构建声明豁免。确认属于豁免时才设置 `ITSAppUsesNonExemptEncryption=false`；需要文稿时，等 Apple 批准后设置 `true` 和匹配的 `ITSEncryptionExportComplianceCode`。MyGo 会拒绝 `true` 配空/缺失代码、错误类型或自相矛盾的键，避免再次出现 `Invalid Export Compliance Code []`；本地检查无法证明代码与远端文稿匹配。参见 [Apple 加密声明说明](https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption) 与 [确认并上传加密文稿](https://developer.apple.com/help/app-store-connect/manage-app-information/determine-and-upload-app-encryption-documentation)。
 
@@ -410,3 +422,9 @@ GOWORK=off go tool mygo push setup /private/path/AuthKey_KEYID.p8
 ```
 
 私钥、设备 token、Tailcat link、profile 和临时 fixture 不放进仓库或完整日志。不要为了更新 GUI 重新生成连接 identity、导入 key 或重启推送 worker。APNs 详细接入见 README 的 iPhone 部分及 MyGo 的推送文档。
+
+## 手机语音输入
+
+会话详情底部直接显示「按住说话」胶囊按钮，左侧键盘按钮切换键盘。终端输入或草稿编辑唤起键盘时隐藏整行语音按钮，收起键盘后恢复；草稿编辑器与「发送」按钮保持可用。进入页面仅查询权限；首次按住才请求麦克风与语音识别权限，授权后再按住开始录音。按住时在输入栏上方显示随应用主题变化的轻量面板，实时展示识别文字，不改变终端尺寸。松开结束识别，上滑 64pt 后松开取消，滑回按钮可撤销取消；无需额外选择「转文字」。结果先进入可编辑草稿，点击「发送」将文字写入当前会话并提交一次回车；草稿中的换行和控制字符转为空格，避免变成多次提交。
+
+MyGo 的 `Speech` API 提供 Apple 设备端识别、实时完整文本、停止/取消、60 秒录音上限及识别结束超时；Retty 只绘制 UI 并绑定当前会话。离开页面、切换会话或进入后台会取消，旧回调不会写入新会话。`ios.capabilities` 声明 `microphone` 和 `speech`，并配置两个用途说明。设备/语言不支持离线识别时显示原因，不自动改用云端。后续豆包可实现 MyGo `SpeechProvider`，复用手势和草稿确认流程。

@@ -54,6 +54,7 @@ func (m *mobileApp) startPolling(client *rex.Client, generation int) {
 }
 
 func (m *mobileApp) enterBackground() {
+	m.cancelSpeech(true)
 	m.clearKeyboardModifiers()
 	if m.background {
 		return

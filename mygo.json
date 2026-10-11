@@ -1,10 +1,14 @@
 {
   "name": "Retty",
   "identifier": "com.daodao.retty",
-  "version": "0.1.0",
+  "version": "0.1.2",
   "copyright": "Retty — Reconnect TTY / Relay TTY. Inspired by Rex, built with MyGo.",
   "out": "build",
   "icon": "resources/icon.png",
+  "updates": {
+    "github": "daodao97/retty",
+    "publicKey": "+DrpSGHk0b89nfUVaFwnZZv+xvVMbK1UgfhcVIPHinA="
+  },
   "macos": {
     "minimumSystemVersion": "13.0",
     "infoPlist": {
@@ -15,10 +19,12 @@
     "retty"
   ],
   "ios": {
-    "capabilities": ["camera"],
+    "capabilities": ["camera", "microphone", "speech"],
     "minimumSystemVersion": "15.0",
     "infoPlist": {
-      "NSCameraUsageDescription": "扫描 Retty 桌面端的二维码以连接终端会话。"
+      "NSCameraUsageDescription": "扫描 Retty 桌面端的二维码以连接终端会话。",
+      "NSMicrophoneUsageDescription": "按住说话，将语音转换为可编辑的终端输入文字。",
+      "NSSpeechRecognitionUsageDescription": "使用 Apple 语音识别将说话内容转换为文字。"
     },
     "buildNumber": "1",
     "developmentTeam": "XNDA84PBM3",

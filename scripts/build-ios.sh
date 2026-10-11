@@ -37,6 +37,8 @@ import json, os, sys
 from pathlib import Path
 root, stage = map(Path, sys.argv[1:])
 config = json.loads((root / 'mygo.json').read_text())
+# Desktop self-updates are unavailable on iOS; TestFlight/App Store own updates.
+config.pop('updates', None)
 config['main'] = str(root / config.get('main', '.'))
 config['out'] = str(root / config.get('out', 'build'))
 config['icon'] = str(root / 'resources/ios/app-icon.png')

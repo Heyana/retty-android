@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo"
+	updatenative "github.com/egoist/mygo/plugins/updater/native"
 	"github.com/egoist/mygo/ui"
 
 	"retty/internal/push"
@@ -102,6 +103,8 @@ func main() {
 	}
 	registerFonts()
 	loadSettings()
+	// Only the desktop GUI owns updates. Daemons, hooks and iOS return above.
+	mygo.Use(updatenative.Plugin)
 	a := &App{}
 	mygo.App.SetMenu(a.menu())
 	mygo.App.WhenReady(a.open)
