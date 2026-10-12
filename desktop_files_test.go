@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -16,7 +17,73 @@ import (
 
 	"github.com/egoist/mygo/ui"
 	"retty/internal/files"
+	"retty/internal/rex"
 )
+
+func TestNewTabLeavesFileWorkspace(t *testing.T) {
+	for _, remote := range []bool{false, true} {
+		for _, layout := range []string{"", "sidebar"} {
+			t.Run(fmt.Sprintf("remote=%t/layout=%s", remote, layout), func(t *testing.T) {
+				previous := prefs
+				prefs = settings{FontSize: defaultFontSize, DesktopLayout: layout}
+				t.Cleanup(func() { prefs = previous })
+				t.Setenv("RETTY_DIR", t.TempDir())
+				client, _ := desktopFixtureClient(t)
+				registerFonts()
+				a := &App{client: client}
+				if remote {
+					h := fixtureDesktopHost(t, client)
+					a.desktops.hosts = []*desktopHost{h}
+					in, err := client.Create(rex.CreateOptions{Dir: t.TempDir(), Cols: 80, Rows: 24})
+					if err != nil {
+						t.Fatal(err)
+					}
+					a.openDesktopSession(h, in, true)
+				} else {
+					a.newLocalTab(t.TempDir())
+				}
+				t.Cleanup(func() {
+					if a.files != nil {
+						a.files.stop()
+					}
+					for _, tab := range a.tabs {
+						for _, p := range tab.panes() {
+							a.endPane(p, false)
+						}
+					}
+				})
+				tt := ui.NewTester(a.view, 1000, 620)
+				original := a.tab()
+				a.toggleFiles()
+				tt.Frame()
+				browser := a.files
+				ctx, cancel := context.WithCancel(context.Background())
+				browser.previewCancel = cancel
+				if layout == "sidebar" {
+					// Native menu accelerators dispatch commands outside the headless tester.
+					cmdNewTab.Run(a)
+				} else if err := tt.Click("New Tab"); err != nil {
+					t.Fatal(err)
+				}
+				waitFor(t, tt, "new terminal tab", func() bool { return len(a.tabs) == 2 && !prefs.FilesOpen })
+				tt.Frame()
+				if a.tab() == original || a.files != nil || readSettings().FilesOpen || !a.paneIsViewed(a.tab().Focus) {
+					t.Fatal("new tab did not replace the file workspace")
+				}
+				if ctx.Err() == nil {
+					t.Fatal("file preview request remained active")
+				}
+				tt.Type("printf 'new-tab-%s\\n' focused")
+				tt.Key(0, ui.KeyEnter)
+				waitFor(t, tt, "new tab input", func() bool { return strings.Contains(a.tab().Focus.term.Text(), "new-tab-focused") })
+				infos, err := client.List()
+				if err != nil || len(infos) != 2 || infos[0].Exited || infos[1].Exited {
+					t.Fatal("original session was not preserved", infos, err)
+				}
+			})
+		}
+	}
+}
 
 func TestDesktopFilesBrowsePreviewAndLayouts(t *testing.T) {
 	previous := prefs

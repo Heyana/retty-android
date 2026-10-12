@@ -55,6 +55,9 @@ _retty_mark_prompt() {
   local code=$?
   emulate -L zsh
   if ! zle; then
+    # A TUI can detach or crash without restoring its Kitty keyboard stack.
+    # ZLE uses legacy input. Clear nested modes before it reads the next line.
+    printf '\e[<999u\e[=0u'
     printf '\e]133;D;%d\a' $code
   fi
   [[ -o promptpercent ]] || return
@@ -68,6 +71,24 @@ _retty_mark_prompt() {
 _retty_command_start() {
   printf '\e]133;C\a'
 }
+_retty_ignore_key_release() { :; }
+_retty_install_keyboard() {
+  emulate -L zsh
+  local keymap key binding
+  zle -N _retty_ignore_key_release
+  for keymap in emacs viins vicmd; do
+    # Already queued CSI-u events may arrive after the mode reset. Preserve
+    # user bindings; otherwise give Ctrl+C its usual meaning and eat key-up.
+    for key in $'\e[99;5u' $'\e[99;5:1u' $'\e[99;5:2u'; do
+      binding=$(bindkey -M $keymap "$key")
+      [[ $binding != *' undefined-key' ]] || bindkey -M $keymap "$key" send-break
+    done
+    for key in $'\e[99;5:3u' $'\e[99;1:3u'; do
+      binding=$(bindkey -M $keymap "$key")
+      [[ $binding != *' undefined-key' ]] || bindkey -M $keymap "$key" _retty_ignore_key_release
+    done
+  done
+}
 _retty_install_marks() {
   emulate -L zsh
   # Login startup files can rebuild PATH. Keep the pane's Codex launcher first.
@@ -76,6 +97,7 @@ _retty_install_marks() {
   add-zsh-hook -d precmd _retty_install_marks
   add-zsh-hook precmd _retty_mark_prompt
   add-zsh-hook preexec _retty_command_start
+  _retty_install_keyboard
   _retty_mark_prompt
 }
 typeset -ga precmd_functions

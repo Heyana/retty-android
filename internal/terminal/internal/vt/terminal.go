@@ -514,7 +514,7 @@ func (t *Terminal) VT() []byte { return t.vtRecent(0) }
 func (t *Terminal) VTRecent(historyRows int) []byte { return t.vtRecent(historyRows) }
 
 func (t *Terminal) vtRecent(historyRows int) []byte {
-	opts := formatterOptions{size: unsafe.Sizeof(formatterOptions{}), emit: formatVT}
+	opts := formatterOptions{size: unsafe.Sizeof(formatterOptions{}), emit: formatVT, unwrap: true}
 	x := &opts.extra
 	x.size = unsafe.Sizeof(opts.extra)
 	x.modes, x.scrollingRegion, x.tabstops, x.pwd, x.keyboard = true, true, true, true, true
@@ -533,6 +533,12 @@ func (t *Terminal) vtRecent(historyRows int) []byte {
 			opts.selection = uintptr(unsafe.Pointer(&selection))
 		}
 	}
+	data := t.formatBytes(opts)
+	opts.emit = 2 // GHOSTTY_FORMATTER_FORMAT_HTML
+	return snapshotLinks(data, t.formatBytes(opts), t.snapshotCursorLink())
+}
+
+func (t *Terminal) formatBytes(opts formatterOptions) []byte {
 	var f uintptr
 	if formatterTerminalNew(0, &f, t.h, opts) != 0 {
 		return nil

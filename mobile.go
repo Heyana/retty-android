@@ -481,6 +481,7 @@ func (m *mobileApp) openSession(s rex.SessionInfo) {
 	options.Font, options.Theme, options.DarkTheme = terminal.Font{Family: termFont.Family, Size: 13, LineHeight: 1.2}, lightTerm, darkTerm
 	options.AdaptiveColors, options.OptionAsAlt, options.SelectOnDrag, options.CopyRawText = true, true, true, true
 	options.ActiveCursor, options.InputContext, options.OnPaste = true, true, m.pasteClipboard
+	options.OpenLinksOnTap = true
 	options.OnSubmit = m.dismissKeyboard
 	term, err := terminal.New(options)
 	if err != nil {

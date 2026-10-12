@@ -578,6 +578,9 @@ func (a *App) createDesktopSession(h *desktopHost, dir string, split *Pane, vert
 			h.sessions = append(h.sessions, in)
 			if split == nil {
 				a.openDesktopSession(h, in, true)
+				if prefs.FilesOpen {
+					a.toggleFiles()
+				}
 				return
 			}
 			if split.closed || split.Tab.Host != h || !slices.Contains(a.tabs, split.Tab) {

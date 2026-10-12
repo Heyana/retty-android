@@ -382,6 +382,9 @@ func (a *App) newLocalTab(dir string) *Tab {
 	a.tabs = slices.Insert(a.tabs, at, t)
 	a.active = at
 	a.focusReq = p
+	if prefs.FilesOpen {
+		a.toggleFiles()
+	}
 	a.changed()
 	return t
 }

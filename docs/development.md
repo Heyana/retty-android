@@ -37,6 +37,8 @@ macOS 会话服务和推送 worker 通过 launchd 启动，再加载用户的登
 
 launchd 注册只在服务需要启动时创建，不安装开机/登录启动项，不自动重启退出的服务。重复启动请求不会结束正在运行的实例。旧服务已经继承的环境不会因 GUI 更新而改变；有真实任务时保留它，待任务结束后再安排服务更新。
 
+zsh 会话在返回提示符时清空遗留的 Kitty 键盘协议栈，防止 TUI 退出后 Ctrl+C 仍按 CSI-u 编码。ZLE 同时处理已在途的 Ctrl+C 按下/重复事件并忽略松开事件，保留用户已有的按键绑定。注入脚本由会话服务在创建 shell 时写入；GUI 更新不会修改已有 shell 的脚本或升级运行中的服务，这项修复在更新服务后创建的新会话中生效。不要为了启用它重启仍有真实任务的服务。
+
 ## 常用检查
 
 ```sh
@@ -169,7 +171,7 @@ open /Applications/Retty.app
 
 这只是未公证构建的临时安装方法，不是正式分发修复。正式修复是上述 Developer ID 签名和 Apple 公证，不关闭系统全局 Gatekeeper。
 
-下面是仅修改 Go 代码、资源和应用配置保持一致时的本机更新流程。先在同一个终端定义只读快照函数；它只发送 `hello`、`list`，不会启动或重启服务，也不保存终端内容、任务提示或 token：
+下面是仅修改 Go 代码、资源和应用配置保持一致时的本机更新流程。即使只替换可执行文件，也必须通过 `mygo build` 构建：它会从 `mygo.json` 注入应用版本、更新地址和验签公钥；仅设置生产标志和 `mygo_noinspector` 的手工 `go build` 会禁用自动更新，并显示「无法在当前安装位置自行更新」。先在同一个终端定义只读快照函数；它只发送 `hello`、`list`，不会启动或重启服务，也不保存终端内容、任务提示或 token：
 
 ```sh
 snapshot_sessions() {
@@ -217,10 +219,8 @@ APP_DIR=/Applications/Retty.app
 mkdir -p "$MAINT_DIR"
 snapshot_sessions > "$MAINT_DIR/before.json"
 ditto "$APP_DIR" "$MAINT_DIR/Retty-before.app"
-GOWORK=off go build -tags mygo_noinspector \
-  -ldflags '-X github.com/egoist/mygo.production=1' \
-  -o "$MAINT_DIR/Retty" .
-go version -m "$MAINT_DIR/Retty" | rg -F -- '-X github.com/egoist/mygo.production=1'
+env -u MYGO_INSPECTOR GOWORK=off go tool mygo build -platform darwin/arm64 -skip-dmg .
+cp build/darwin-arm64/Retty.app/Contents/MacOS/Retty "$MAINT_DIR/Retty"
 go version -m "$MAINT_DIR/Retty" | rg -F mygo_noinspector
 osascript -e 'tell application id "com.daodao.retty" to quit'
 install -m 755 "$MAINT_DIR/Retty" "$APP_DIR/Contents/MacOS/Retty.next"
@@ -422,6 +422,10 @@ GOWORK=off go tool mygo push setup /private/path/AuthKey_KEYID.p8
 ```
 
 私钥、设备 token、Tailcat link、profile 和临时 fixture 不放进仓库或完整日志。不要为了更新 GUI 重新生成连接 identity、导入 key 或重启推送 worker。APNs 详细接入见 README 的 iPhone 部分及 MyGo 的推送文档。
+
+## 手机终端链接
+
+手机会话中的网页链接可直接轻点，在默认浏览器打开；终端的 OSC 8 显示文字和跨行 URL 都按当前显示位置命中。轻点在松开时才打开，滑动滚屏、取消触摸和长按选择不打开链接。通用 `OpenLinksOnTap` 能力先合入 MyGo fork 的终端插件，再同步到 Retty 的 vendor；桌面保留 Command / Control 点击。
 
 ## 手机语音输入
 

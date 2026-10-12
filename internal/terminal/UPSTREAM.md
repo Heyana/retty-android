@@ -120,3 +120,17 @@ previous Retty pin `bc60b9d50231`, the framework terminal adds `ClearSelection`
 and a fitted-font validation test, both already covered by Retty's vendor.
 The Ghostty manifest and terminal renderer are unchanged; Retty keeps its
 local CLI/iOS packaging and terminal additions.
+
+Fork commit `cfa1af8d1350` adds opt-in `Options.OpenLinksOnTap`. Unmodified
+primary taps open links on release; movement, cancellation, scrolling and
+long presses do not open them. Retty carries the same behavior into its
+vendor and enables it only for mobile sessions. Link hit testing uses the
+visible emulator, including Retty's local compact/reflowed presentation,
+so OSC 8 labels and wrapped URLs resolve at their displayed coordinates.
+
+Fork commit `c55486a` also preserves soft wraps and cell-level OSC 8 targets
+when serializing VT snapshots. The pinned Ghostty formatter includes those
+targets in HTML but not VT, so the Go binding pairs both formats by exact
+text positions, retaining duplicate labels, Unicode and history targets.
+Retty mirrors the fix in both full and recent-history snapshots; native
+library manifests and iOS/CLI packaging remain unchanged.

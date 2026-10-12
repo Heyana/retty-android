@@ -124,24 +124,25 @@ func (m linkMatch) valid() bool { return m.URL != "" || m.Path != "" }
 // linkAt reads just the pointed logical line, never the full scrollback.
 // The emulator lock is held by its caller.
 func (v *view) linkAt(x, y float32) linkMatch {
-	if v.t.term == nil || v.cellW == 0 || x*v.scale < float32(v.ox) || y*v.scale < float32(v.oy) ||
+	screen := v.screen()
+	if screen == nil || v.cellW == 0 || x*v.scale < float32(v.ox) || y*v.scale < float32(v.oy) ||
 		x*v.scale >= float32(v.ox+v.cols*v.cellW) || y*v.scale >= float32(v.oy+v.rows*v.cellH) {
 		return linkMatch{}
 	}
 	col, row := v.cellAt(x, y)
-	if ref, ok := v.t.term.CellAt(col, row); ok {
-		if url := v.t.term.Hyperlink(ref); url != "" {
+	if ref, ok := screen.CellAt(col, row); ok {
+		if url := screen.Hyperlink(ref); url != "" {
 			a, b := col, col+1
 			for a > 0 {
-				ref, ok := v.t.term.CellAt(a-1, row)
-				if !ok || v.t.term.Hyperlink(ref) != url {
+				ref, ok := screen.CellAt(a-1, row)
+				if !ok || screen.Hyperlink(ref) != url {
 					break
 				}
 				a--
 			}
 			for b < v.cols {
-				ref, ok := v.t.term.CellAt(b, row)
-				if !ok || v.t.term.Hyperlink(ref) != url {
+				ref, ok := screen.CellAt(b, row)
+				if !ok || screen.Hyperlink(ref) != url {
 					break
 				}
 				b++
@@ -152,7 +153,7 @@ func (v *view) linkAt(x, y float32) linkMatch {
 	if m := v.hardWrappedFileAt(col, row); m.valid() {
 		return m
 	}
-	text, cols, start := v.t.term.LogicalRowText(row)
+	text, cols, start := screen.LogicalRowText(row)
 	m := matchLink(text, cols, col+(row-start)*v.cols)
 	if m.valid() {
 		m.setCells(cols, start)
@@ -171,10 +172,11 @@ func (m *linkMatch) setCells(cols []int, start int) {
 // wrap it. Recover file references at those edges, without changing the VT's
 // actual line boundaries (selection, search and ordinary URLs still use them).
 func (v *view) hardWrappedFileAt(col, row int) linkMatch {
+	screen := v.screen()
 	first, last := max(0, row-8), min(v.rows-1, row+7)
 	texts, columns := make([][]rune, last-first+1), make([][]int, last-first+1)
 	for y := first; y <= last; y++ {
-		r, c := v.t.term.RowText(y)
+		r, c := screen.RowText(y)
 		end := len(r)
 		for end > 0 && unicode.IsSpace(r[end-1]) {
 			end--
@@ -186,7 +188,7 @@ func (v *view) hardWrappedFileAt(col, row int) linkMatch {
 		cols := append([]int(nil), columns[start-first]...)
 		for end := start; end < last; end++ {
 			r, c := texts[end-first], columns[end-first]
-			if len(r) == 0 || v.t.term.RowsJoined(end) ||
+			if len(r) == 0 || screen.RowsJoined(end) ||
 				v.cols-c[len(c)-1]-1 > 8 || !unfinishedFileAtEdge(text, cols) {
 				break
 			}

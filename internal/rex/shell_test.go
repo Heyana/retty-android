@@ -98,3 +98,79 @@ func TestColorLoginShellPreservesUserPreferences(t *testing.T) {
 	}
 	t.Fatalf("user color preference lost: %q", s.vt.Text())
 }
+
+func keyboardShell(t *testing.T, keymap string, setup ...string) *session {
+	t.Helper()
+	zsh, err := exec.LookPath("zsh")
+	if err != nil {
+		t.Skip("zsh is not installed")
+	}
+	t.Setenv("RETTY_DIR", t.TempDir())
+	config := t.TempDir()
+	rc := "PROMPT='keyboard> '\nbindkey -A " + keymap + " main\n" + strings.Join(setup, "\n")
+	if err := os.WriteFile(filepath.Join(config, ".zshrc"), []byte(rc), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	s, err := newSession("keyboard-test", CreateOptions{
+		Command: []string{zsh, "-i"}, Dir: config, Cols: 80, Rows: 24,
+		Env: []string{"ZDOTDIR=" + config},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(s.kill)
+	waitKeyboardShell(t, s, func(text string) bool { return strings.Contains(text, "keyboard>") })
+	return s
+}
+
+func waitKeyboardShell(t *testing.T, s *session, ready func(string) bool) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		if ready(s.vt.Text()) {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("shell did not become ready: %q", s.vt.Text())
+}
+
+func TestZshLateCtrlCDoesNotTypeProtocol(t *testing.T) {
+	for _, keymap := range []string{"emacs", "viins"} {
+		t.Run(keymap, func(t *testing.T) {
+			s := keyboardShell(t, keymap)
+			// A release can already be in flight when a TUI restores the
+			// terminal. Split it across writes, as on a remote connection.
+			for _, part := range []string{"\x1b[99;", "5:3u", "\x1b[99;1:3u", "echo clean\r"} {
+				s.input([]byte(part))
+			}
+			waitKeyboardShell(t, s, func(text string) bool { return strings.Count(text, "keyboard>") >= 2 })
+			text := s.vt.Text()
+			if !strings.Contains(text, "\nclean\n") || strings.Contains(text, "5:3u") {
+				t.Fatalf("late Ctrl+C release leaked into shell input: %q", text)
+			}
+			// Late presses/repeats must still cancel the pending line,
+			// just like Ctrl+C in legacy mode, without executing it.
+			for _, press := range []string{"\x1b[99;5u", "\x1b[99;5:1u", "\x1b[99;5:2u"} {
+				before := strings.Count(s.vt.Text(), "keyboard>")
+				s.input([]byte("echo SHOULD-NOT-RUN" + press))
+				waitKeyboardShell(t, s, func(text string) bool { return strings.Count(text, "keyboard>") > before })
+				s.input([]byte("echo next\r"))
+				waitKeyboardShell(t, s, func(text string) bool { return strings.Count(text, "keyboard>") > before+1 })
+				if text := s.vt.Text(); strings.Contains(text, "\nSHOULD-NOT-RUN\n") || strings.Contains(text, ";5u") || strings.Contains(text, "5:1u") || strings.Contains(text, "5:2u") {
+					t.Fatalf("late Ctrl+C press changed the command: %q", text)
+				}
+			}
+		})
+	}
+}
+
+func TestZshKeyboardRecoveryPreservesCustomBindings(t *testing.T) {
+	s := keyboardShell(t, "emacs", `
+fixture_ctrl_c() { LBUFFER+=CUSTOM; }
+zle -N fixture_ctrl_c
+bindkey -M emacs $'\e[99;5u' fixture_ctrl_c
+`)
+	s.input([]byte("echo \x1b[99;5u\r"))
+	waitKeyboardShell(t, s, func(text string) bool { return strings.Contains(text, "\nCUSTOM\n") })
+}
