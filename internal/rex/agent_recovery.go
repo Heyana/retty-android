@@ -221,12 +221,24 @@ func (s *Server) forgetRecovery(sid string) error {
 	return s.saveRecovery()
 }
 
+func (s *Server) systemShuttingDown() bool {
+	if s.shuttingDown != nil {
+		return s.shuttingDown()
+	}
+	return SystemShuttingDown()
+}
+
 // recordAgent updates the recovery record from an accepted, normalized hook.
 func (s *Server) recordAgent(ss *session, agent string, h agents.HookInput) error {
 	ss.mu.Lock()
 	revision := max(ss.agent.state.WaitRevision, ss.agent.state.CompletionRevision, ss.programStatus.serial)
 	ss.mu.Unlock()
 	if h.Event == "SessionEnd" || agent != "codex" && agent != "claude" {
+		// Shutdown can terminate the Agent before this daemon. Its end hook
+		// is not a user ending the conversation; retain the durable record.
+		if s.systemShuttingDown() {
+			return nil
+		}
 		return s.forgetRecovery(ss.id)
 	}
 	if ss.p == nil || ss.p.cmd.Process == nil {
@@ -263,7 +275,7 @@ func (s *Server) recordAgent(ss *session, agent string, h agents.HookInput) erro
 	}
 	previous := s.recovery[ss.id]
 	s.recovery[ss.id] = r
-	if previous.Agent == r.Agent && previous.SessionID == r.SessionID && previous.Dir == r.Dir && previous.Error == "" && slices.Equal(previous.Options, r.Options) && slices.Equal(previous.Env, r.Env) {
+	if previous.Revision == r.Revision && previous.Agent == r.Agent && previous.SessionID == r.SessionID && previous.Dir == r.Dir && previous.Error == "" && slices.Equal(previous.Options, r.Options) && slices.Equal(previous.Env, r.Env) {
 		return nil
 	}
 	return s.saveRecovery()
@@ -274,6 +286,9 @@ func (s *Server) restoreAgent(req Request) (RestoreResult, error) {
 	defer s.agentMu.Unlock()
 	if s.ending {
 		return RestoreResult{}, errors.New("session server is ending")
+	}
+	if s.systemShuttingDown() {
+		return RestoreResult{}, errors.New("system is shutting down")
 	}
 	if req.SID == "" {
 		return RestoreResult{}, errors.New("missing pane session ID")
@@ -339,6 +354,9 @@ func (s *Server) restoreAgent(req Request) (RestoreResult, error) {
 }
 
 func (s *Server) updateRecoveryExit(ss *session) {
+	if s.systemShuttingDown() {
+		return
+	}
 	r, ok := s.recovery[ss.id]
 	if !ok {
 		return
@@ -380,6 +398,9 @@ func (s *Server) watchRecovery() {
 func (s *Server) checkRecovery() {
 	s.agentMu.Lock()
 	defer s.agentMu.Unlock()
+	if s.systemShuttingDown() {
+		return
+	}
 	for sid, r := range s.recovery {
 		ss, _ := s.session(sid)
 		if ss == nil {
@@ -410,6 +431,11 @@ func (s *Server) checkRecovery() {
 		}
 		// An Agent killed from outside cannot emit SessionEnd. A stopped
 		// or backgrounded Agent remains recorded while its process lives.
+		// Process inspection can span the start of shutdown; check again at
+		// the destructive boundary rather than relying on the loop's entry.
+		if s.systemShuttingDown() {
+			return
+		}
 		if err := s.forgetRecovery(sid); err != nil {
 			log.Printf("rex: forget Agent recovery: %v", err)
 		}

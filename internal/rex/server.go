@@ -36,7 +36,8 @@ type Server struct {
 	agentToken    string
 	recoveryPath  string
 	recovery      map[string]agentResume
-	ending        bool // explicit End All prevents late hooks from recreating records
+	shuttingDown  func() bool // nil uses the OS detector; injectable for shutdown fixtures
+	ending        bool        // explicit End All prevents late hooks from recreating records
 	sessions      map[string]*session
 	order         []string
 	layout        json.RawMessage

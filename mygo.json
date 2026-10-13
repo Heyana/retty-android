@@ -12,7 +12,8 @@
   "macos": {
     "minimumSystemVersion": "13.0",
     "infoPlist": {
-      "CFBundleIconName": "RettyAppIcon"
+      "CFBundleIconName": "RettyAppIcon",
+      "NSLocalNetworkUsageDescription": "连接同一 Wi-Fi 下的 Retty 设备，通过局域网加密直连降低终端延迟。"
     }
   },
   "urlSchemes": [
@@ -23,6 +24,7 @@
     "minimumSystemVersion": "15.0",
     "infoPlist": {
       "NSCameraUsageDescription": "扫描 Retty 桌面端的二维码以连接终端会话。",
+      "NSLocalNetworkUsageDescription": "连接同一 Wi-Fi 下的 Retty 设备，通过局域网加密直连降低终端延迟。",
       "NSMicrophoneUsageDescription": "按住说话，将语音转换为可编辑的终端输入文字。",
       "NSSpeechRecognitionUsageDescription": "使用 Apple 语音识别将说话内容转换为文字。"
     },

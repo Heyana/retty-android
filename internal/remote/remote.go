@@ -202,23 +202,11 @@ func connect(ctx context.Context, raw string, reportFailure bool, diagnostics *D
 	if err != nil {
 		return nil, nil, err
 	}
-	unbind, stopDiscovery := func() {}, func() {}
+	unbind := func() {}
 	if quality != nil {
-		// Discovery belongs to the tunnel, not the short-lived dialing context
-		// or a terminal attachment. Network changes can make a relayed path direct.
-		lifetime, cancel := context.WithCancel(context.Background())
-		unbind = quality.bindProbe(serializedPathProbe(lifetime, func(ctx context.Context) (PathSample, error) {
-			p, err := t.client.DiscoPing(ctx)
-			if err != nil {
-				return PathSample{}, err
-			}
-			return PathSample{At: time.Now(), Direct: p.Endpoint != "", Latency: time.Duration(p.LatencySeconds * float64(time.Second))}, nil
-		}))
-		go discoverPath(lifetime, quality, 2*time.Second, 30*time.Second)
-		stopDiscovery = cancel
+		unbind = t.path.bind(quality)
 	}
 	return client, func() {
-		stopDiscovery()
 		unbind()
 		t.close()
 	}, nil

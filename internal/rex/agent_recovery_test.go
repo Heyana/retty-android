@@ -419,3 +419,99 @@ func TestAgentRecoveryUnknownFilePreserved(t *testing.T) {
 		t.Fatal("unknown data overwritten")
 	}
 }
+
+func TestAgentRecoveryShutdownRetainsConversation(t *testing.T) {
+	for _, mode := range []string{"end-hook", "missing-process", "shell-exit", "resume-exit"} {
+		t.Run(mode, func(t *testing.T) {
+			s := recoveryServer(t)
+			fakeResumeCLI(t, "claude", false)
+			ss, err := newSession("pane", CreateOptions{Command: []string{"/bin/sh"}, Dir: Dir(), resumed: mode == "resume-exit"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			s.sessions[ss.id] = ss
+			report := func(event string) {
+				t.Helper()
+				if err := s.reportAgent(Request{SID: ss.id, Token: ss.agentToken, AgentEvent: &AgentEvent{Agent: "claude", At: time.Now(), Input: agents.HookInput{Event: event, SessionID: "shutdown-thread", CWD: Dir()}}}); err != nil {
+					t.Fatal(err)
+				}
+			}
+			report("SessionStart")
+			report("Stop")
+			original := s.recovery[ss.id]
+			s.shuttingDown = func() bool { return true }
+			switch mode {
+			case "end-hook":
+				report("SessionEnd")
+			case "missing-process":
+				// The Agent has already vanished, but its shell/daemon still live.
+				r := original
+				r.seen = time.Now().Add(-time.Minute)
+				s.recovery[ss.id] = r
+			case "shell-exit", "resume-exit":
+				ss.input([]byte("exit 0\r"))
+				select {
+				case <-ss.done:
+				case <-time.After(3 * time.Second):
+					t.Fatal("owned shell did not exit")
+				}
+				s.updateRecoveryExit(ss)
+			}
+			s.checkRecovery()
+			if _, err := s.restoreAgent(Request{SID: ss.id}); err == nil {
+				t.Fatal("launched Agent during shutdown")
+			}
+			// Read the actual on-disk record in a new daemon, then resume it.
+			reopened := &Server{sessions: map[string]*session{}}
+			if err := reopened.loadRecovery(Dir()); err != nil {
+				t.Fatal(err)
+			}
+			if got := reopened.recovery[ss.id]; got.SessionID != original.SessionID || got.Error != "" || got.Revision != original.Revision {
+				t.Fatal("shutdown damaged durable conversation", got)
+			}
+			result, err := reopened.restoreAgent(Request{SID: ss.id, Cols: 80, Rows: 24})
+			if err != nil || result.Session == nil || !result.Session.Resumed {
+				t.Fatal("next boot could not resume", result, err)
+			}
+			t.Cleanup(func() { reopened.sessions[ss.id].kill() })
+		})
+	}
+}
+
+func TestAgentRecoveryExplicitCloseDuringShutdown(t *testing.T) {
+	for _, op := range []string{"kill", "shutdown"} {
+		t.Run(op, func(t *testing.T) {
+			s := recoveryServer(t)
+			s.recovery["pane"] = agentResume{Agent: "claude", SessionID: "closed-thread", Dir: Dir()}
+			s.shuttingDown = func() bool { return true }
+			if _, err := s.do(Request{Op: op, SID: "pane"}); err != nil {
+				t.Fatal(err)
+			}
+			loaded := &Server{}
+			if err := loaded.loadRecovery(Dir()); err != nil || len(loaded.recovery) != 0 {
+				t.Fatal("explicit close survived shutdown", err)
+			}
+		})
+	}
+}
+
+func TestAgentRecoveryPersistsRepeatedTurnRevision(t *testing.T) {
+	s := recoveryServer(t)
+	ss, err := newSession("pane", CreateOptions{Command: []string{"/bin/sh"}, Dir: Dir()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.sessions[ss.id] = ss
+	for _, event := range []string{"SessionStart", "UserPromptSubmit", "Stop", "UserPromptSubmit", "Stop"} {
+		if err := s.reportAgent(Request{SID: ss.id, Token: ss.agentToken, AgentEvent: &AgentEvent{Agent: "claude", At: time.Now(), Input: agents.HookInput{Event: event, SessionID: "thread", CWD: Dir()}}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	loaded := &Server{}
+	if err := loaded.loadRecovery(Dir()); err != nil {
+		t.Fatal(err)
+	}
+	if got := loaded.recovery[ss.id].Revision; got != ss.agent.state.CompletionRevision || got < 2 {
+		t.Fatal("later completion revision was only updated in memory", got)
+	}
+}

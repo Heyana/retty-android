@@ -133,6 +133,7 @@ type App struct {
 	saveDue               bool
 	lastSave              time.Time
 	quitting              bool
+	shuttingDown          func() bool // nil uses the OS detector
 	focusedWin            bool
 	activeRemote          *Pane
 	remoteReleases        []remoteSizeRelease
@@ -327,7 +328,7 @@ func (a *App) attach(p *Pane, cols, rows int) {
 	}
 	options.OnExit = func(int) {
 		update(func() {
-			if p.closed || a.quitting || p.stream != stream {
+			if p.closed || a.quitting || p.stream != stream || a.systemShuttingDown() {
 				return
 			}
 			if p.host == nil {

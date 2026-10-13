@@ -326,13 +326,13 @@ API key 为 individual 类型时，登录使用 `--key-type individual` 并省�
 
 `ExportReport.json` 必须通过分发签名、App Store profile、生产推送权限及符号检查；工作流额外确认 profile 包含实际分发签名证书、禁用权限没有链接进 IPA、包与发布清单一致。`BuildReport.json` 检查的是 archive 中的开发签名，不能代替分发检查。TestFlight 分组需要显式指定，流程不会默认通知测试者或提交 beta/App Store 审核。
 
-`ios.capabilities` 启用 `camera`（扫码）、`microphone` 和 `speech`（按住说话转文字），并提供对应用途说明。MyGo 不编译闲置的位置、照片授权和 Face ID 接口，普通 Keychain 存储不引用生物识别接口。通知权限仍由用户主动开启。若新增受保护功能，需同步启用对应 capability 并填写实际用途说明。
+`ios.capabilities` 启用 `camera`（扫码）、`microphone` 和 `speech`（按住说话转文字），并提供对应用途说明。iOS 和 macOS 的 `infoPlist` 均提供 `NSLocalNetworkUsageDescription`，说明同一 Wi-Fi 下的加密直连用途；系统未允许本地网络访问时，局域网直连可能不可用。MyGo 不编译闲置的位置、照片授权和 Face ID 接口，普通 Keychain 存储不引用生物识别接口。通知权限仍由用户主动开启。若新增受保护功能，需同步启用对应 capability 并填写实际用途说明。
 
 Retty 的 Tailcat 隧道包含 Apple 系统之外的加密实现。目前省略两个出口加密键，上传后在 App Store Connect 如实完成加密问卷。不要仅为了通过构建声明豁免。确认属于豁免时才设置 `ITSAppUsesNonExemptEncryption=false`；需要文稿时，等 Apple 批准后设置 `true` 和匹配的 `ITSEncryptionExportComplianceCode`。MyGo 会拒绝 `true` 配空/缺失代码、错误类型或自相矛盾的键，避免再次出现 `Invalid Export Compliance Code []`；本地检查无法证明代码与远端文稿匹配。参见 [Apple 加密声明说明](https://developer.apple.com/documentation/bundleresources/information-property-list/itsappusesnonexemptencryption) 与 [确认并上传加密文稿](https://developer.apple.com/help/app-store-connect/manage-app-information/determine-and-upload-app-encryption-documentation)。
 
 ## 隔离的远程连接与真机测试
 
-桌面连接建立后在后台使用当前 Tailcat 隧道的 `DiscoPing` 尝试直连，失败或中继时先以 2、4、8、16 秒间隔重试，然后每 30 秒检查一次，直连成功后直接进入 30 秒间隔；单次 3 秒超时，不阻塞连接初始化或创建终端 attachment。最近连接的指标弹层打开时最多每 10 秒额外采样一次，与后台探测串行共享同一隧道。探测随隧道关闭取消，不依赖短暂的拨号 context，也不会触发会话重连。请求耗时、中位数/P95、超时、重连和画面恢复统计来自已有轮询与恢复流程，仅在内存保留最近 5 分钟、最多各 256 条记录。正常切 tab 后保活到期的接入不计为异常画面恢复；请求耗时包含远端处理时间，超时次数不代表网络丢包。手机连接诊断保持原有流程。
+Tailcat 隧道首次 TCP 拨号成功后，即在后台使用 `DiscoPing` 尝试直连；手机首页的预连接也启动探测，点击连接后复用同一个探测 worker 和已有路径指标。失败或中继时先以 2、4、8、16 秒间隔重试，然后每 30 秒检查一次，直连成功后直接进入 30 秒间隔；单次 3 秒超时，不阻塞连接初始化或创建终端 attachment。所有活动及预连接隧道共用一个按需启动的网络监听器，接口/地址变化或系统唤醒时立即唤醒探测并重置短间隔重试；已建立隧道上的新拨号也唤醒探测，不重建隧道或会话。最近连接的指标弹层打开时最多每 10 秒额外采样一次，与后台探测串行共享同一隧道。探测随隧道关闭取消，不依赖短暂的拨号 context，也不会触发会话重连；最后一个探测 worker 退出时关闭网络监听器。请求耗时、中位数/P95、超时、重连和画面恢复统计来自已有轮询与恢复流程，仅在内存保留最近 5 分钟、最多各 256 条记录。正常切 tab 后保活到期的接入不计为异常画面恢复；请求耗时包含远端处理时间，超时次数不代表网络丢包。手机连接诊断保持原有流程。
 
 Tailcat 服务端会永久保留每个连接过的节点密钥，并在每次新连接时向所有历史对端发送端点通告。因此每台设备在数据目录（桌面 `remote/client-secret`）或 Keychain（手机 `tunnel-secret`）保存一个私有种子，按桌面派生 4 个固定密钥槽：新隧道选用一个既未在用、又已关闭超过 10 秒的槽（刚关闭的密钥在桌面端仍信任旧的直连 UDP 路径，立即复用会让握手等待 WireGuard 5 秒重试），槽都不可用时才退回临时密钥。种子载入前、CLI 和测试仍使用临时密钥。手机首页的在线探测成功后，隧道会保留 45 秒，下一次探测或点击连接直接在其上建立控制连接；离线桌面的探测间隔从 30 秒逐步退避到 5 分钟，进入后台时关闭保留的隧道。手机同样在后台做直连探测。从后台恢复时，保留的控制连接 2 秒内无响应就在同一隧道上并行重拨，取先成功者。`list` 响应带 ETag，内容未变时只回 ETag 不回列表；这是新增字段，旧版两端会忽略，不需要提升协议版本。
 

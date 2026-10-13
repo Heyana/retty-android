@@ -100,6 +100,7 @@ type tunnel struct {
 	logf   atomic.Pointer[func(string, ...any)]
 	used   atomic.Bool // a connection succeeded, so its stack is up
 	once   sync.Once
+	path   *pathDiscovery
 }
 
 func openTunnel(addr, server tailcat.Addr) *tunnel {
@@ -114,6 +115,13 @@ func openTunnel(addr, server tailcat.Addr) *tunnel {
 			(*logf)(format, args...)
 		}
 	}
+	t.path = newPathDiscovery(func(ctx context.Context) (PathSample, error) {
+		p, err := t.client.DiscoPing(ctx)
+		if err != nil {
+			return PathSample{}, err
+		}
+		return PathSample{At: time.Now(), Direct: p.Endpoint != "", Latency: time.Duration(p.LatencySeconds * float64(time.Second))}, nil
+	})
 	return t
 }
 
@@ -147,11 +155,17 @@ func (t *tunnel) setLog(logf func(string, ...any)) {
 }
 
 func (t *tunnel) dial(parent context.Context) (net.Conn, error) {
+	if t.used.Load() {
+		// A stream/control redial after suspension should not wait for
+		// the periodic discovery timer to find the new local path.
+		t.path.request()
+	}
 	ctx, cancel := context.WithTimeout(parent, 15*time.Second)
 	defer cancel()
 	conn, err := t.client.DialTCPPort(ctx, Port)
 	if err == nil {
 		t.used.Store(true)
+		t.path.start()
 	}
 	return conn, err
 }
@@ -161,6 +175,7 @@ func (t *tunnel) dial(parent context.Context) (net.Conn, error) {
 // stack stops.
 func (t *tunnel) close() {
 	t.once.Do(func() {
+		t.path.cancel()
 		if !t.pub.IsZero() {
 			keyed.Lock()
 			delete(keyed.live, t.pub)

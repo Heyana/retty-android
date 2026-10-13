@@ -129,12 +129,19 @@ func (q *Quality) Snapshot(now time.Time) QualitySnapshot {
 }
 
 func (q *Quality) bindProbe(probe func(context.Context) (PathSample, error)) func() {
+	_, unbind := q.bindPathProbe(probe, PathSample{})
+	return unbind
+}
+
+// The recorder shares Probe's epoch guard, so background discovery cannot
+// publish a result from a tunnel that this Quality has already replaced.
+func (q *Quality) bindPathProbe(probe func(context.Context) (PathSample, error), initial PathSample) (func(PathSample, error), func()) {
 	q.mu.Lock()
 	q.probeEpoch++
 	epoch := q.probeEpoch
-	q.probe, q.path = probe, PathSample{}
+	q.probe, q.path = probe, initial
 	q.mu.Unlock()
-	return func() {
+	return func(p PathSample, err error) { q.recordPath(epoch, p, err) }, func() {
 		q.mu.Lock()
 		defer q.mu.Unlock()
 		if q.probeEpoch == epoch {
@@ -154,6 +161,11 @@ func (q *Quality) Probe(ctx context.Context) error {
 		return nil
 	}
 	p, err := probe(ctx)
+	q.recordPath(epoch, p, err)
+	return err
+}
+
+func (q *Quality) recordPath(epoch uint64, p PathSample, err error) {
 	q.mu.Lock()
 	defer q.mu.Unlock()
 	if q.probeEpoch == epoch {
@@ -162,5 +174,4 @@ func (q *Quality) Probe(ctx context.Context) error {
 			q.path = p
 		}
 	}
-	return err
 }

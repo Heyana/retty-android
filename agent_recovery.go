@@ -5,6 +5,13 @@ import (
 	"retty/internal/rex"
 )
 
+func (a *App) systemShuttingDown() bool {
+	if a.shuttingDown != nil {
+		return a.shuttingDown()
+	}
+	return rex.SystemShuttingDown()
+}
+
 // Stream EOF has no process exit code. Ask the daemon before deciding whether
 // to close a resumed pane; a CLI error must keep its output and retry action.
 func (a *App) checkAgentRestoreExit(p *Pane, stream *rex.Stream) {
@@ -20,7 +27,7 @@ func (a *App) checkAgentRestoreExit(p *Pane, stream *rex.Stream) {
 			}
 		}
 		update(func() {
-			if p.closed || a.quitting || p.stream != stream {
+			if p.closed || a.quitting || p.stream != stream || a.systemShuttingDown() {
 				return
 			}
 			if err == nil && info != nil && info.Exited && info.ExitCode == 0 {

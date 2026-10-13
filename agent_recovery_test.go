@@ -242,3 +242,60 @@ func TestAgentRecoveryReopenFailureRetainsOutput(t *testing.T) {
 	b.tab().Zoom = nil
 	waitFor(t, ui.NewTester(b.view, 1000, 620), "failed CLI screen replay", func() bool { return strings.Contains(p.term.Text(), "conversation unavailable") })
 }
+
+func TestAgentRecoveryShutdownKeepsLayoutAfterProcessExit(t *testing.T) {
+	a, tt, _ := newRecoveryTestApp(t, false, true)
+	a.shuttingDown = func() bool { return true }
+	a.tab().Zoom = nil
+	panes := a.tab().panes()
+	p := panes[0]
+	waitFor(t, tt, "owned resumed process exits during shutdown", func() bool {
+		infos, _ := a.client.List()
+		for _, in := range infos {
+			if in.ID == p.SID {
+				return in.Exited
+			}
+		}
+		return false
+	})
+	// Also exercise the pending asynchronous exit-check response.
+	a.checkAgentRestoreExit(p, p.stream)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		a.postMu.Lock()
+		ready := len(a.posted) > 0
+		a.postMu.Unlock()
+		if ready {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("shutdown exit callback did not arrive")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	tt.Frame()
+	a.saveNow()
+	if p.closed || p.recoveryError != "" || len(a.tab().panes()) != 2 {
+		t.Fatal("shutdown changed workspace or recorded a retry failure")
+	}
+	raw, err := a.client.Layout()
+	var layout savedLayout
+	if err != nil || json.Unmarshal(raw, &layout) != nil || layout.Tabs[0].Root.A.SID != "agent-pane" {
+		t.Fatal("shutdown lost durable pane identity", err)
+	}
+}
+
+func TestShutdownKeepsOrdinaryShellPane(t *testing.T) {
+	a, tt := newTestApp(t)
+	a.shuttingDown = func() bool { return true }
+	p := a.tab().Focus
+	p.term.Send([]byte("exit 0\r"))
+	waitFor(t, tt, "owned shell exits during shutdown", func() bool {
+		infos, _ := a.client.List()
+		return len(infos) == 1 && infos[0].Exited
+	})
+	tt.Frame()
+	if p.closed || len(a.tabs) != 1 || a.snapshot().Tabs[0].Root.SID != p.SID {
+		t.Fatal("automatic shell exit removed shutdown layout")
+	}
+}

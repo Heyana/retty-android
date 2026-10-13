@@ -188,15 +188,32 @@ func TestTailcatStableKeyAndWarmTunnel(t *testing.T) {
 	}
 	cold := time.Since(started)
 	warm.Lock()
-	parked := warm.tunnels[addr] != nil
+	parked := warm.tunnels[addr]
 	warm.Unlock()
-	if !parked {
+	if parked == nil {
 		t.Fatal("a probe that reached the desktop did not park its tunnel")
+	}
+	// The preview alone must prewarm path discovery, before OpenConnection
+	// attaches a metrics subscriber or creates any terminal streams.
+	deadline = time.Now().Add(10 * time.Second)
+	for {
+		parked.t.path.mu.Lock()
+		path := parked.t.path.last
+		parked.t.path.mu.Unlock()
+		if !path.At.IsZero() {
+			t.Logf("preview path: direct=%v RTT=%v", path.Direct, path.Latency)
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("parked preview did not discover a transport path")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 	device := rex.DeviceInfo{Name: "Test iPhone", OS: "iOS"}
 	for i := range 3 {
 		started = time.Now()
-		client, closeTunnel, _, sessions, err := OpenConnection(ctx, link, device, nil, nil)
+		quality := &Quality{}
+		client, closeTunnel, _, sessions, err := OpenConnection(ctx, link, device, nil, quality)
 		if err != nil {
 			t.Fatalf("connection %d: %v", i, err)
 		}
@@ -204,7 +221,17 @@ func TestTailcatStableKeyAndWarmTunnel(t *testing.T) {
 		if i == 0 && takeTunnel(addr) != nil {
 			t.Fatal("the connection left the probe's tunnel parked")
 		}
+		if i == 0 && quality.Snapshot(time.Now()).Path.At.IsZero() {
+			t.Fatal("warm connection did not inherit preview path metrics")
+		}
 		CloseConnection(client, closeTunnel)
+		if i == 0 {
+			select {
+			case <-parked.t.path.done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("preview discovery survived the connection's tunnel close")
+			}
+		}
 	}
 	// The probe's tunnel became the first connection; the next two took the
 	// following slots without waiting for the first to rest.

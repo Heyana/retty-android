@@ -65,3 +65,22 @@ func TestQualityProbeRejectsReplacedTunnel(t *testing.T) {
 		t.Fatal("failed probe showed stale latency")
 	}
 }
+
+func TestQualityBackgroundRecorderRejectsReplacedTunnel(t *testing.T) {
+	q := &Quality{}
+	probe := func(context.Context) (PathSample, error) { return PathSample{}, nil }
+	oldRecord, oldUnbind := q.bindPathProbe(probe, PathSample{})
+	current := PathSample{At: time.Now(), Direct: true, Latency: time.Millisecond}
+	newRecord, newUnbind := q.bindPathProbe(probe, current)
+	defer newUnbind()
+	oldUnbind()
+	oldRecord(PathSample{At: time.Now(), Latency: time.Hour}, nil)
+	oldRecord(PathSample{}, errors.New("old tunnel closed"))
+	if p := q.Snapshot(time.Now()).Path; p != current {
+		t.Fatal("old background discovery overwrote the new tunnel", p)
+	}
+	newRecord(PathSample{}, errors.New("current probe failed"))
+	if !q.Snapshot(time.Now()).Path.At.IsZero() {
+		t.Fatal("failed background probe retained stale measurements")
+	}
+}
