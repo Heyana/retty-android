@@ -60,7 +60,7 @@ func (a *App) startRemotePane(p *Pane, takeover bool) {
 		if p.streamEnded && p.host.quality != nil {
 			p.host.quality.ScreenRecovered(time.Now())
 		}
-		reader := a.paneClient(p).ViewStream(p.SID)
+		reader := a.paneClient(p).ViewStream(p.SID).PreferScreenSync(false)
 		reader.OnData = func(int) { p.lastData.Store(time.Now().UnixNano()) }
 		p.remoteView.geometry(p.info.Cols, p.info.Rows)
 		p.remoteView.replace(reader)
@@ -114,6 +114,7 @@ func (a *App) startRemotePane(p *Pane, takeover bool) {
 				stream = client.Stream(p.SID, cols, rows)
 			}
 			p.stream = stream
+			stream.PreferScreenSync(true)
 			owner, locked := p.remoteOwner, a.hostHello(p.host).Version >= 6
 			go func() {
 				err := stream.Resize(cols, rows)

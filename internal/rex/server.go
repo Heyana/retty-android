@@ -194,9 +194,14 @@ func (s *Server) handle(conn net.Conn) {
 			ss.lockSize(a.Owner, a.Device, a.Cols, a.Rows, conn, a.SizeLease)
 			defer ss.releaseSizeAttachment(a.Owner, conn)
 		}
-		answer, _ := json.Marshal(attachResponse{OK: true, ScreenFrames: a.ScreenFrames, SizeLease: a.Owner != "" && a.SizeLease})
+		stateSync := a.ScreenFrames && a.ScreenSync
+		answer, _ := json.Marshal(attachResponse{OK: true, ScreenFrames: a.ScreenFrames, ScreenSync: stateSync, SizeLease: a.Owner != "" && a.SizeLease})
 		if _, err := conn.Write(append(answer, '\n')); err != nil {
 			conn.Close()
+			return
+		}
+		if stateSync {
+			ss.attachScreenSync(conn, r, a.Cols, a.Rows, a.InputOnly)
 			return
 		}
 		// What the reader buffered past the first line is input.
@@ -286,7 +291,13 @@ func (s *Server) do(req Request) (any, error) {
 		host := s.host
 		s.mu.Unlock()
 		host.ID = s.hostID
-		return Hello{Version: ProtocolVersion, PID: os.Getpid(), Started: s.started, Host: host, Exe: s.exe, ExeTime: s.exeTime, AgentRecovery: s.recoveryPath != "", Attention: s.attentionPath != ""}, nil
+		return Hello{Version: ProtocolVersion, PID: os.Getpid(), Started: s.started, Host: host, Exe: s.exe, ExeTime: s.exeTime, AgentRecovery: s.recoveryPath != "", Attention: s.attentionPath != "", ScreenSync: true}, nil
+	case "history":
+		ss, err := s.session(req.SID)
+		if err != nil {
+			return nil, err
+		}
+		return ss.history(req.HistoryRows)
 	case "list":
 		s.mu.Lock()
 		all := make([]*session, 0, len(s.order))

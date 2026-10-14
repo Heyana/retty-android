@@ -200,7 +200,7 @@ func TestDesktopFilesBrowsePreviewAndLayouts(t *testing.T) {
 	if err := tt.Click("README.md"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, tt, "text preview", func() bool { return a.files.preview != "" && !a.files.previewLoading && len(a.files.previewRows) > 0 })
+	waitFor(t, tt, "text preview", func() bool { return a.files.preview != "" && !a.files.previewLoading && a.files.previewCode != nil })
 	if !tt.HasText("文件预览") {
 		t.Fatal(tt.Texts())
 	}
@@ -219,6 +219,26 @@ func TestDesktopFilesBrowsePreviewAndLayouts(t *testing.T) {
 	if tt.Clipboard() != "# Fixture\n文件预览\n" {
 		t.Fatal(tt.Clipboard())
 	}
+	// The official editor must support selection across lines without editing.
+	if err := tt.Click("文件预览"); err != nil {
+		t.Fatal(err)
+	}
+	tt.Key(ui.Cmd, ui.KeyA)
+	tt.Type("accidental edit")
+	tt.Key(ui.Cmd, ui.KeyC)
+	if tt.Clipboard() != "# Fixture\n文件预览\n" || a.files.previewCode.Buffer.String() != string(a.files.previewData) {
+		t.Fatal("read-only preview changed text or lost its multiline selection", tt.Clipboard())
+	}
+	// App and native-menu Find commands must search the loaded file.
+	tt.Key(ui.Cmd, ui.KeyF)
+	tt.Frame()
+	tt.Type("文件预览")
+	tt.Frame()
+	if count, _ := a.files.previewCode.FindMatches(); count != 1 || a.files.filter != "" || p.find.open {
+		t.Fatal("file search went to the tree or the hidden terminal", count)
+	}
+	tt.Key(0, ui.KeyEscape)
+	tt.Frame()
 	chooseFileAction(t, tt, "放大预览")
 	tt.Frame()
 	if !a.files.expanded {
@@ -382,8 +402,8 @@ func TestDesktopFileGitPreview(t *testing.T) {
 	if err := tt.Click("new.go"); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, tt, "diff preview", func() bool { return !a.files.previewLoading && len(a.files.previewRows) > 0 })
-	if !tt.HasText("文件树") || a.files.previewLanguage != "Go" || len(a.files.previewSyntax) == 0 {
+	waitFor(t, tt, "diff preview", func() bool { return !a.files.previewLoading && a.files.previewDiff != nil })
+	if !tt.HasText("文件树") || a.files.previewLanguage != "Go" || a.files.previewDiff.New.Language() == nil {
 		t.Fatal("diff tree or syntax missing", a.files.previewLanguage)
 	}
 

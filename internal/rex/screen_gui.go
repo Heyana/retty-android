@@ -4,16 +4,13 @@ package rex
 
 import (
 	"io"
-	"retty/internal/terminal"
+	"retty/internal/terminal/screen"
 )
 
 func newSessionScreen(cols, rows int, bell func()) (sessionScreen, io.Closer, error) {
-	pr, pw := io.Pipe()
-	t, err := terminal.New(terminal.Options{Conn: discard{pr}, Scrollback: scrollback, OnBell: bell})
+	t, err := screen.New(cols, rows, scrollback, bell)
 	if err != nil {
-		pr.Close()
-		pw.Close()
 		return nil, nil, err
 	}
-	return t, pw, nil
+	return t, t, nil
 }

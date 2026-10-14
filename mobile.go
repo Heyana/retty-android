@@ -22,6 +22,7 @@ import (
 )
 
 type mobileApp struct {
+	terminalHistory                    *terminalHistory
 	readReceipts                       readReceiptState
 	win                                *mygo.Window
 	startup                            *ui.Startup
@@ -215,6 +216,10 @@ func (m *mobileApp) save(key string, data []byte, failed func()) {
 }
 
 func (m *mobileApp) detach() {
+	if m.terminalHistory != nil {
+		m.terminalHistory.close()
+		m.terminalHistory = nil
+	}
 	m.cancelSpeech(true)
 	m.releaseSizeLock()
 	m.clearKeyboardModifiers()
@@ -570,6 +575,7 @@ func (m *mobileApp) contentView(c *ui.Context) {
 	m.sessionEndDialog(c)
 	m.connectionDialog(c)
 	m.connectionDiagnosticsDialog(c)
+	m.terminalHistory.view(c)
 	if page := m.navigation.Path(); page != m.navigationPage {
 		// A completed edge gesture changes history. Release resources only
 		// after the new page has built; a cancelled preview keeps them alive.
@@ -637,6 +643,13 @@ func mobileBackButton(c *ui.Context) ui.Element {
 }
 
 func (m *mobileApp) header(c *ui.Context, title string, back func(), terminalPage bool) {
+	status := ""
+	if terminalPage {
+		status = screenFreshness(c, m.stream)
+		if m.needsRecovery() {
+			status = m.recoveryStatus()
+		}
+	}
 	ui.Row(c).Height(52).Padding(0, 8).AlignItems(ui.Center).Children(func() {
 		if back != nil {
 			if mobileBackButton(c).Clicked() {
@@ -651,12 +664,16 @@ func (m *mobileApp) header(c *ui.Context, title string, back func(), terminalPag
 				align = ui.Start
 			}
 			size := float32(17)
-			if terminalPage && m.needsRecovery() {
+			if status != "" {
 				size = 15
 			}
 			ui.Text(c, title).FontSize(size).Bold().TextAlign(align).FillWidth().SingleLine().Ellipsis("…").PassThrough()
-			if terminalPage && m.needsRecovery() {
-				ui.Text(c, m.recoveryStatus()).Label("正在重连").FontSize(11).TextColor(c.Theme().TextMuted).TextAlign(align).FillWidth().SingleLine().Ellipsis("…").PassThrough()
+			if status != "" {
+				label := "画面连接状态"
+				if m.needsRecovery() {
+					label = "正在重连"
+				}
+				ui.Text(c, status).Label(label).FontSize(11).TextColor(c.Theme().TextMuted).TextAlign(align).FillWidth().SingleLine().Ellipsis("…").PassThrough()
 			}
 		})
 		if terminalPage && m.term != nil && m.needsRecovery() {
@@ -664,6 +681,14 @@ func (m *mobileApp) header(c *ui.Context, title string, back func(), terminalPag
 				ui.Text(c, "•••").FontSize(16).TextColor(c.Theme().TextMuted)
 			}).Clicked() {
 				m.connectionDetailsOpen = true
+			}
+		} else if terminalPage && m.stream != nil {
+			if enabled, _, _ := m.stream.ScreenStatus(); enabled {
+				if mobileIconAction(c, "查看终端历史", "rotate-ccw").Clicked() {
+					m.openTerminalHistory()
+				}
+			} else {
+				ui.Box(c).Size(44, 44).Shrink(0)
 			}
 		} else {
 			ui.Box(c).Size(44, 44).Shrink(0)

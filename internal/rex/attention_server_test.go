@@ -158,7 +158,7 @@ func TestAttentionRetainsExplicitOneShotResultOnShell(t *testing.T) {
 
 func TestCodexSummaryRejectsForeignAndCommentaryItems(t *testing.T) {
 	var tracker agentTracker
-	o := &codexObserver{pending: map[string]string{}, emit: func(h agents.HookInput) { tracker.apply(AgentEvent{Agent: "codex", Input: h, At: time.Now()}) }}
+	o := &codexObserver{pending: map[string]codexThreadRequest{}, emit: func(h agents.HookInput) { tracker.apply(AgentEvent{Agent: "codex", Input: h, At: time.Now()}) }}
 	msg := func(raw string) { o.message([]byte(raw), false) }
 	o.message([]byte(`{"id":1,"method":"thread/start"}`), true)
 	msg(`{"id":1,"result":{"thread":{"id":"own","status":{"type":"idle"}}}}`)

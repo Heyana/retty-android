@@ -1,6 +1,9 @@
 package terminal
 
-import "retty/internal/terminal/internal/vt"
+import (
+	"retty/internal/terminal/internal/vt"
+	"time"
+)
 
 type readingPosition struct {
 	offset, distance int
@@ -31,7 +34,15 @@ func (p *readingPosition) restore(screen *vt.Terminal) {
 // Keep the old emulator and reading viewport intact until that point, then
 // replace the screen in one critical section. No PTY resize is sent by viewers.
 func (t *Terminal) restoreSnapshot(data []byte, cols, rows int) {
-	t.clearInputContext()
+	continuous := false
+	if source, ok := t.src.(interface {
+		ScreenStatus() (bool, time.Time, uint64)
+	}); ok {
+		continuous, _, _ = source.ScreenStatus()
+	}
+	if !continuous {
+		t.clearInputContext()
+	}
 	t.mu.Lock()
 	if t.term == nil || t.closed {
 		t.mu.Unlock()

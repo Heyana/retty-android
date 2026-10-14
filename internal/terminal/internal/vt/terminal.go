@@ -513,6 +513,9 @@ func (t *Terminal) VT() []byte { return t.vtRecent(0) }
 // megabytes of old output on every frame.
 func (t *Terminal) VTRecent(historyRows int) []byte { return t.vtRecent(historyRows) }
 
+// VTScreen serializes only the active grid, with its cursor and modes.
+func (t *Terminal) VTScreen() []byte { return t.vtRecent(-1) }
+
 func (t *Terminal) vtRecent(historyRows int) []byte {
 	opts := formatterOptions{size: unsafe.Sizeof(formatterOptions{}), emit: formatVT, unwrap: true}
 	x := &opts.extra
@@ -522,10 +525,10 @@ func (t *Terminal) vtRecent(historyRows int) []byte {
 	x.screen.cursor, x.screen.style, x.screen.hyperlink, x.screen.protection, x.screen.kittyKeyboard, x.screen.charsets = true, true, true, true, true, true
 	var selection Selection
 	defer runtime.KeepAlive(&selection)
-	if historyRows > 0 && !t.AltScreen() {
+	if historyRows != 0 && !t.AltScreen() {
 		cols, rows := t.Size()
 		total := int(t.Scrollbar().Total)
-		start := max(total-rows-historyRows, 0)
+		start := max(total-rows-max(historyRows, 0), 0)
 		var a, b GridRef
 		a.size, b.size = unsafe.Sizeof(a), unsafe.Sizeof(b)
 		if terminalGridRef(t.h, point{tag: 2, y: uint32(start)}, &a) == 0 && terminalGridRef(t.h, point{tag: 2, x: uint16(cols - 1), y: uint32(total - 1)}, &b) == 0 {

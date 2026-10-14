@@ -114,7 +114,7 @@ func (a *App) agentIndicator(c *ui.Context, k *colors, p *Pane, s rex.AgentState
 }
 
 func (a *App) paneIsViewed(p *Pane) bool {
-	if prefs.FilesOpen {
+	if prefs.FilesOpen || a.terminalHistory != nil && a.terminalHistory.open {
 		return false
 	}
 	if p == nil || p.closed {
@@ -183,6 +183,10 @@ func (a *App) updateAgentNotice(p *Pane, previous rex.AgentState) {
 		a.agentFinishedNotified[p.noticeKey()] = s.CompletionRevision
 		// Restoring a window must not announce historical completed turns.
 		if previous.SessionID == s.SessionID && previous.CompletionRevision == s.CompletionRevision && agents.Finished(previous.State) {
+			return
+		}
+		if rex.AgentTitleCompletion(s) {
+			a.closeAgentNotice(p.noticeKey())
 			return
 		}
 		hidden = prefs.HideAgentCompletionNotifications

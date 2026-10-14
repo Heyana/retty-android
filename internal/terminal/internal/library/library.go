@@ -72,6 +72,9 @@ func Find(manifest []byte) (string, error) {
 	var dirs []string
 	dirs = append(dirs, resourceDirs()...)
 	if exe, err := os.Executable(); err == nil {
+		if real, err := filepath.EvalSymlinks(exe); err == nil {
+			exe = real
+		}
 		dirs = append(dirs, filepath.Dir(exe))
 	}
 	cached, err := cachePath(f)

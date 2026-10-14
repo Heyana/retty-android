@@ -57,6 +57,8 @@ type Request struct {
 	Notice string `json:"notice,omitempty"`
 	// ETag, on "list", names the list the client already has.
 	ETag string `json:"etag,omitempty"`
+	// HistoryRows bounds an independent history snapshot request.
+	HistoryRows int `json:"history_rows,omitempty"`
 }
 
 // Response answers the Request with the same ID.
@@ -141,6 +143,7 @@ type Hello struct {
 	ExeTime       time.Time `json:"exeTime,omitzero"`
 	AgentRecovery bool      `json:"agentRecovery,omitempty"`
 	Attention     bool      `json:"attention,omitempty"`
+	ScreenSync    bool      `json:"screen_sync,omitempty"`
 }
 
 // HostInfo describes the machine the server runs on.
@@ -196,6 +199,11 @@ type Attach struct {
 	// ScreenFrames asks for output framed with the authoritative grid size.
 	// Older servers ignore this field and continue to send raw ANSI.
 	ScreenFrames bool `json:"screen_frames,omitempty"`
+	// ScreenSync negotiates acknowledged viewport states instead of output
+	// bytes, including framed input/acks. Ignored by older servers.
+	ScreenSync bool `json:"screen_sync,omitempty"`
+	// InputOnly suppresses live screen updates on a separate ownership stream.
+	InputOnly bool `json:"input_only,omitempty"`
 	// Owner, with version 6, takes the session's size lock for a device
 	// named Device, at Cols×Rows, before the snapshot is made.
 	Owner  string `json:"owner,omitempty"`

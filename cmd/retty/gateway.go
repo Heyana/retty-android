@@ -12,11 +12,15 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"golang.org/x/sys/unix"
 	"retty/internal/rex"
+	"retty/internal/selfupdate"
 	"retty/internal/terminal/screen"
 )
 
@@ -25,7 +29,8 @@ type gatewayState struct {
 	Ready bool `json:"ready"`
 	// Returned only over the user's private management socket. Public status
 	// output deliberately strips this credential.
-	Link string `json:"link,omitempty"`
+	Link   string             `json:"link,omitempty"`
+	Update *selfupdate.Status `json:"update,omitempty"`
 }
 
 func gatewaySocket() string {
@@ -45,6 +50,9 @@ func gatewayRequest(ctx context.Context, op string) (gatewayState, error) {
 	}
 	defer conn.Close()
 	deadline := time.Now().Add(3 * time.Second)
+	if strings.HasPrefix(op, "update:") {
+		deadline = time.Now().Add(30 * time.Second)
+	}
 	if at, ok := ctx.Deadline(); ok && at.Before(deadline) {
 		deadline = at
 	}
@@ -118,6 +126,24 @@ func stopGateway(ctx context.Context, output io.Writer) error {
 // The lock covers startup, serving and cleanup, including foreground/systemd
 // operation. Concurrent start commands cannot publish competing identities.
 func runGateway(ctx context.Context, output, diagnostics io.Writer, linkFile string, qr bool) error {
+	err := runGatewayOnce(ctx, output, diagnostics, linkFile, qr)
+	var restart *gatewayRestart
+	if errors.As(err, &restart) {
+		// Exec after bridge/socket/identity/lock cleanup; keep the supervisor's
+		// main PID and arguments, including --foreground and custom data paths.
+		return syscall.Exec(restart.entry, append([]string{restart.entry}, os.Args[1:]...), os.Environ())
+	}
+	return err
+}
+
+type gatewayRestart struct{ entry string }
+
+func (e *gatewayRestart) Error() string { return "gateway update restart" }
+
+var gatewayServe = serve
+var gatewayUpdateFactory = newGatewayUpdates
+
+func runGatewayOnce(ctx context.Context, output, diagnostics io.Writer, linkFile string, qr bool) error {
 	if err := os.MkdirAll(rex.Dir(), 0700); err != nil {
 		return err
 	}
@@ -141,6 +167,8 @@ func runGateway(ctx context.Context, output, diagnostics io.Writer, linkFile str
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	var restarting atomic.Bool
+	updates := gatewayUpdateFactory(func() { restarting.Store(true); cancel() })
 	var mu sync.Mutex
 	state := gatewayState{PID: os.Getpid()}
 	go func() {
@@ -151,14 +179,26 @@ func runGateway(ctx context.Context, output, diagnostics io.Writer, linkFile str
 			}
 			go func() {
 				defer conn.Close()
-				conn.SetDeadline(time.Now().Add(3 * time.Second))
+				conn.SetDeadline(time.Now().Add(30 * time.Second))
 				var op string
-				if json.NewDecoder(io.LimitReader(conn, 1024)).Decode(&op) != nil || (op != "status" && op != "stop") {
+				if json.NewDecoder(io.LimitReader(conn, 4096)).Decode(&op) != nil || (op != "status" && op != "stop" && !strings.HasPrefix(op, "update:")) {
 					return
 				}
 				mu.Lock()
 				current := state
 				mu.Unlock()
+				if strings.HasPrefix(op, "update:") {
+					var req selfupdate.Request
+					if json.Unmarshal([]byte(strings.TrimPrefix(op, "update:")), &req) != nil {
+						return
+					}
+					status, err := updates.request(ctx, req)
+					if err != nil {
+						status.Error = err.Error()
+					}
+					current.Update = &status
+					current.Link = ""
+				}
 				json.NewEncoder(conn).Encode(current)
 				if op == "stop" {
 					cancel()
@@ -166,7 +206,10 @@ func runGateway(ctx context.Context, output, diagnostics io.Writer, linkFile str
 			}()
 		}
 	}()
-	err = serve(ctx, output, diagnostics, linkFile, qr, func(link string) { mu.Lock(); state.Link, state.Ready = link, true; mu.Unlock() })
+	err = gatewayServe(ctx, output, diagnostics, linkFile, qr, func(link string) { mu.Lock(); state.Link, state.Ready = link, true; mu.Unlock() }, updates)
+	if restarting.Load() {
+		return &gatewayRestart{entry: updates.engine.Entry}
+	}
 	if ctx.Err() != nil {
 		return nil
 	}

@@ -37,20 +37,23 @@ type session struct {
 	// vt is the session's screen, kept by the terminal emulator of the
 	// app's terminals without a view: a window attaching gets a snapshot
 	// of it at its size, as the session shows it now.
-	vt          sessionScreen
-	vtIn        io.Closer
-	finalScreen []byte // failed resumed CLI output, retained until retry/close
-	finalTitle  string
-	output      uint64
-	bells       atomic.Int64
-	clients     map[*attached]struct{}
-	lastOutput  time.Time
-	lastInput   time.Time
-	resync      *time.Timer
-	resizeAt    time.Time
-	exited      bool
-	code        int
-	cols, rows  int
+	vt             sessionScreen
+	vtIn           io.Closer
+	finalScreen    []byte // failed resumed CLI output, retained until retry/close
+	finalTitle     string
+	finalViewport  []byte
+	screenRevision uint64
+	screenClients  map[*screenPeer]struct{}
+	output         uint64
+	bells          atomic.Int64
+	clients        map[*attached]struct{}
+	lastOutput     time.Time
+	lastInput      time.Time
+	resync         *time.Timer
+	resizeAt       time.Time
+	exited         bool
+	code           int
+	cols, rows     int
 	// sizeLock is the device that took the size with lockSize; while it
 	// is set, only that lock's own resizes reach the PTY.
 	sizeLock, sizeLockDevice string
@@ -182,6 +185,13 @@ func newSessionForServer(id string, o CreateOptions, serverToken string) (*sessi
 		}
 		s.mu.Lock()
 		s.exited, s.code = true, code
+		s.finalViewport = s.vt.SnapshotRecent(-1)
+		s.finalTitle = s.vt.Title()
+		if len(s.screenClients) > 0 {
+			s.finalScreen = s.vt.SnapshotRecent(8192)
+		}
+		s.screenRevision++
+		s.notifyScreensLocked()
 		if s.resumed && code != 0 {
 			s.finalScreen, s.finalTitle = s.vt.Snapshot(), s.vt.Title()
 		}
@@ -249,10 +259,23 @@ func (s *session) read() {
 			}
 			s.mu.Lock()
 			s.vt.Feed(data)
+			var queryReplies [][]byte
+			if source, ok := s.vt.(interface{ DrainEffects() ([][]byte, [][]byte) }); ok {
+				responses, effects := source.DrainEffects()
+				for _, effect := range effects {
+					s.sendScreenEffectLocked(effect)
+				}
+				if len(s.clients) == 0 {
+					queryReplies = responses
+				}
+			}
 			s.output += uint64(n)
 			s.lastOutput = time.Now()
 			s.broadcastLocked(data)
 			s.mu.Unlock()
+			for _, response := range queryReplies {
+				writeAll(s.p.master, response)
+			}
 		}
 		if err != nil {
 			return
@@ -491,7 +514,7 @@ func (s *session) resyncScreen() { s.resend(false) }
 func (s *session) resend(force bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.exited || len(s.clients) == 0 {
+	if s.exited || len(s.clients)+len(s.screenClients) == 0 {
 		return
 	}
 	if !s.resizeAt.IsZero() {
@@ -499,6 +522,11 @@ func (s *session) resend(force bool) {
 			s.resync.Reset(remaining)
 			return
 		}
+	}
+	if len(s.clients) == 0 {
+		s.screenRevision++
+		s.notifyScreensLocked()
+		return
 	}
 	snap := s.vt.Snapshot()
 	var msg []byte
@@ -533,6 +561,8 @@ func (s *session) clear() {
 // broadcastLocked sends output to every attached client at the current
 // size, dropping clients that fell too far behind. s.mu must be held.
 func (s *session) broadcastLocked(p []byte) {
+	s.screenRevision++
+	s.notifyScreensLocked()
 	for a := range s.clients {
 		if !a.sendScreen(p, s.cols, s.rows) {
 			a.finish()
@@ -566,7 +596,7 @@ func (s *session) info() SessionInfo {
 		ID: s.id, Shell: s.shell, Created: s.created,
 		Title: s.vt.Title(), LastOutput: s.lastOutput, LastInput: s.lastInput,
 		Output: s.output, Bells: int(s.bells.Load()), Exited: s.exited, ExitCode: s.code,
-		Attached: len(s.clients), Cols: s.cols, Rows: s.rows,
+		Attached: len(s.clients) + len(s.screenClients), Cols: s.cols, Rows: s.rows,
 		SizeLock: s.sizeLock, SizeLockDevice: s.sizeLockDevice, Agent: s.agent.state,
 		ProgramStatuses: s.programStatus.snapshot(),
 		Resumed:         s.resumed,

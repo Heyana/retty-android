@@ -720,6 +720,20 @@ func (t *Terminal) Snapshot() []byte {
 	return t.term.VT()
 }
 
+// SnapshotRecent includes at most historyRows retained rows above the grid.
+// A negative value requests only the visible grid.
+func (t *Terminal) SnapshotRecent(historyRows int) []byte {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.term == nil {
+		return nil
+	}
+	if historyRows < 0 {
+		return t.term.VTScreen()
+	}
+	return t.term.VTRecent(historyRows)
+}
+
 // Send sends data to the program as if typed.
 func (t *Terminal) Send(data []byte) {
 	if len(data) > 0 {

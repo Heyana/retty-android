@@ -3,7 +3,6 @@ module retty
 go 1.27.1
 
 require (
-	github.com/alecthomas/chroma/v2 v2.27.0
 	github.com/coder/websocket v1.8.14
 	github.com/ebitengine/purego v0.11.1
 	github.com/egoist/mygo v0.2.15
@@ -22,7 +21,6 @@ require (
 	github.com/creachadair/msync v0.8.1 // indirect
 	github.com/creack/pty v1.1.24 // indirect
 	github.com/dblohm7/wingoes v0.0.0-20240119213807-a09d6be7affa // indirect
-	github.com/dlclark/regexp2/v2 v2.2.1 // indirect
 	github.com/fxamacker/cbor/v2 v2.9.0 // indirect
 	github.com/gaissmai/bart v0.26.1 // indirect
 	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68 // indirect
@@ -66,4 +64,4 @@ require (
 tool github.com/egoist/mygo/cmd/mygo
 
 // MyGo source branch: github.com/daodao97/mygo@main.
-replace github.com/egoist/mygo => github.com/daodao97/mygo v0.0.0-20261011233528-c55486a2359b
+replace github.com/egoist/mygo => github.com/daodao97/mygo v0.0.0-20261014041201-d30cf320dd72

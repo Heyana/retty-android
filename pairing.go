@@ -36,6 +36,11 @@ func (a *App) restorePhonePair() {
 }
 
 func (a *App) startPhonePair() {
+	if a.desktopUpdater == nil {
+		a.desktopUpdater = newDesktopUpdateService(func() {
+			mygo.RunOnMain(mygo.App.Relaunch)
+		})
+	}
 	if a.phone == nil {
 		a.phone = &phonePair{}
 	}
@@ -90,7 +95,7 @@ func (a *App) startPhonePair() {
 					a.saveDesktopHistory()
 				}
 			})
-		}, OnPasteImage: pasteRemoteImage})
+		}, OnPasteImage: pasteRemoteImage, OnUpdate: a.desktopUpdater.request})
 		if err != nil {
 			close(stopPush)
 		} else {

@@ -2,9 +2,11 @@ package rex
 
 import (
 	"crypto/sha256"
+	"encoding/json"
 	"fmt"
 	"retty/internal/agents"
 	"strconv"
+	"strings"
 )
 
 // AgentNoticeID is shared by local reminders, APNs and foreground receipts.
@@ -36,6 +38,9 @@ func AgentNoticeID(desktop string, s SessionInfo) string {
 // completion from silence, title text or terminal output, or report old results
 // when a viewer first subscribes.
 func AgentNoticeTransition(previous, current SessionInfo) bool {
+	if !AgentNoticeState(current) {
+		return false
+	}
 	p, a := previous.Agent, current.Agent
 	same := (p.ID == a.ID || a.Source == ProgramStatusSource) && p.SessionID == a.SessionID && p.Source == a.Source
 	switch a.State {
@@ -74,5 +79,19 @@ func LegacyCompletionState(previous, next SessionInfo) AgentState {
 
 // AgentNoticeState remains true only while this exact reminder is relevant.
 func AgentNoticeState(s SessionInfo) bool {
-	return s.Agent.State == agents.Waiting || agents.Finished(s.Agent.State)
+	return (s.Agent.State == agents.Waiting || agents.Finished(s.Agent.State)) && !AgentTitleCompletion(s.Agent)
+}
+
+// AgentTitleCompletion recognizes the title-only JSON produced by Codex's
+// internal naming task. Keep lifecycle state, but never announce it as work.
+func AgentTitleCompletion(a AgentState) bool {
+	if a.ID != "codex" || a.State != agents.Completed || a.Source == ProgramStatusSource {
+		return false
+	}
+	var result map[string]json.RawMessage
+	if json.Unmarshal([]byte(a.Summary), &result) != nil || len(result) != 1 {
+		return false
+	}
+	var title string
+	return json.Unmarshal(result["title"], &title) == nil && strings.TrimSpace(title) != ""
 }

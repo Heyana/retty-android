@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 )
 
 type paneFind struct {
@@ -15,6 +16,10 @@ type paneFind struct {
 
 func (a *App) openFind() {
 	if prefs.FilesOpen && a.files != nil {
+		if a.files.previewCode != nil {
+			a.files.previewCode.Run(editor.Find)
+			return
+		}
 		a.files.filterFocus = true
 		return
 	}
@@ -44,6 +49,16 @@ func (a *App) closeFind(p *Pane) {
 }
 
 func (a *App) findStep(direction int) {
+	if prefs.FilesOpen && a.files != nil {
+		if a.files.previewCode != nil {
+			command := editor.FindNext
+			if direction < 0 {
+				command = editor.FindPrevious
+			}
+			a.files.previewCode.Run(command)
+		}
+		return
+	}
 	if t := a.tab(); t != nil && t.Focus != nil && t.Focus.term != nil {
 		p := t.Focus
 		if !p.find.open {

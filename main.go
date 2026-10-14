@@ -96,6 +96,7 @@ func main() {
 	// The state of the sessions lives in the app's data directory, which
 	// the server it starts takes from RETTY_DIR: "Retty", or "Retty Dev"
 	// under mygo dev, which keeps the installed app's sessions apart.
+	performanceRun := configurePerformanceFixture()
 	if os.Getenv("RETTY_DIR") == "" {
 		if dir, err := mygo.App.Path(mygo.PathUserData); err == nil {
 			os.Setenv("RETTY_DIR", dir)
@@ -104,7 +105,10 @@ func main() {
 	registerFonts()
 	loadSettings()
 	// Only the desktop GUI owns updates. Daemons, hooks and iOS return above.
-	mygo.Use(updatenative.Plugin)
+	if !performanceRun {
+		mygo.Updater.SetKeepPreviousBundles(true)
+		mygo.Use(updatenative.Plugin)
+	}
 	a := &App{}
 	mygo.App.SetMenu(a.menu())
 	mygo.App.WhenReady(a.open)
@@ -189,7 +193,11 @@ func (a *App) open() {
 	a.changed()
 	go a.poll(win, client)
 	a.debugHook()
+	a.performanceFixture()
 	win.OnClosed(func() {
+		if a.terminalHistory != nil {
+			a.terminalHistory.close()
+		}
 		if a.files != nil {
 			a.files.stop()
 		}

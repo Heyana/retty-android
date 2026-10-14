@@ -36,7 +36,8 @@ type Client struct {
 // Connect connects to the server, starting one in the background when
 // none runs.
 func Connect() (*Client, error) {
-	conn, err := net.Dial("unix", SocketPath())
+	socket := SocketPath()
+	conn, err := net.Dial("unix", socket)
 	if err != nil {
 		if err := Spawn(); err != nil {
 			return nil, fmt.Errorf("rex: starting the server: %w", err)
@@ -44,7 +45,7 @@ func Connect() (*Client, error) {
 		deadline := time.Now().Add(5 * time.Second)
 		for {
 			time.Sleep(30 * time.Millisecond)
-			conn, err = net.Dial("unix", SocketPath())
+			conn, err = net.Dial("unix", socket)
 			if err == nil {
 				break
 			}
@@ -53,7 +54,9 @@ func Connect() (*Client, error) {
 			}
 		}
 	}
-	return NewClient(conn, localDial), nil
+	// Pin every later stream/extension to this server, even if a fixture or
+	// caller changes the process-wide data-directory environment afterward.
+	return NewClient(conn, func(ctx context.Context) (net.Conn, error) { return (&net.Dialer{}).DialContext(ctx, "unix", socket) }), nil
 }
 
 func localDial(ctx context.Context) (net.Conn, error) {
@@ -348,6 +351,16 @@ type Stream struct {
 	beforeAttach                    <-chan struct{}
 	releaseDone                     chan struct{}
 	screenFrames                    bool
+	wantScreenSync, inputOnly       bool
+	screenSync                      bool
+	stateSequence, stateAck         uint64 // sole reader; ack after consumption
+	stateData                       []byte
+	statePending                    []byte // compatibility ReadScreen chunks
+	stateEffects                    []byte
+	stateCols, stateRows            int
+	stateConfirmed                  time.Time // guarded by mu
+	stateRevision                   uint64    // guarded by mu
+	stateWriteMu                    sync.Mutex
 	frameLeft, frameCols, frameRows int
 	c                               *Client
 	sid                             string
@@ -446,17 +459,22 @@ func (s *Stream) attach() {
 	conn, err := dial(ctx)
 	var frames bool
 	var leased bool
+	var stateSync bool
 	if err == nil {
 		conn.SetDeadline(time.Now().Add(15 * time.Second))
 		// Every stream asks for frames: a window decoding a locked
 		// session at the lock's size follows their geometry.
 		// The lock is taken with the attach, so its snapshot already has
 		// the device's size.
-		b, _ := json.Marshal(Attach{Op: "attach", SID: s.sid, Cols: cols, Rows: rows, ScreenFrames: true, Owner: owner, Device: device, SizeLease: owner != ""})
+		s.mu.Lock()
+		wantSync, inputOnly := s.wantScreenSync, s.inputOnly
+		s.mu.Unlock()
+		b, _ := json.Marshal(Attach{Op: "attach", SID: s.sid, Cols: cols, Rows: rows, ScreenFrames: true, ScreenSync: wantSync, InputOnly: inputOnly, Owner: owner, Device: device, SizeLease: owner != ""})
 		if _, err = conn.Write(append(b, '\n')); err == nil {
 			var answer attachResponse
 			answer, err = readAttachOK(conn)
 			frames, leased = answer.ScreenFrames, answer.SizeLease && owner != ""
+			stateSync = answer.ScreenSync && frames && wantSync
 		}
 		conn.SetDeadline(time.Time{})
 		if err != nil {
@@ -475,6 +493,7 @@ func (s *Stream) attach() {
 		s.err = err
 	} else {
 		s.conn, s.sentCols, s.sentRows, s.screenFrames = conn, cols, rows, frames
+		s.screenSync = stateSync
 		s.locked, s.lockedAt = owner != "", time.Now()
 		if leased {
 			ctx, cancel := context.WithCancel(context.Background())
@@ -546,6 +565,7 @@ func (s *Stream) sync() error {
 
 type attachResponse struct {
 	ScreenFrames bool   `json:"screen_frames,omitempty"`
+	ScreenSync   bool   `json:"screen_sync,omitempty"`
 	SizeLease    bool   `json:"size_lease,omitempty"`
 	OK           bool   `json:"ok"`
 	Error        string `json:"error,omitempty"`
@@ -625,6 +645,9 @@ func (s *Stream) readSnapshot(timeout time.Duration) ([]byte, int, int, error) {
 		return nil, 0, 0, err
 	}
 	defer conn.SetReadDeadline(time.Time{})
+	if s.syncEnabled() {
+		return s.readScreenState(conn)
+	}
 	buf := make([]byte, 64<<10)
 	n, cols, rows, err := s.ReadScreen(buf)
 	if err != nil {
@@ -650,6 +673,9 @@ func (s *Stream) ReadScreen(p []byte) (int, int, int, error) {
 	conn, err := s.wait()
 	if err != nil {
 		return 0, 0, 0, err
+	}
+	if s.syncEnabled() {
+		return s.readStateBytes(conn, p)
 	}
 	cols, rows := 0, 0
 	if s.HasScreenSize() {
@@ -682,6 +708,18 @@ func (s *Stream) Write(p []byte) (int, error) {
 	conn, err := s.wait()
 	if err != nil {
 		return 0, err
+	}
+	if s.syncEnabled() {
+		written := 0
+		for len(p) > 0 {
+			n := min(len(p), 32<<10)
+			if err := s.writeStateMessage(conn, screenInput, p[:n]); err != nil {
+				return written, err
+			}
+			written += n
+			p = p[n:]
+		}
+		return written, nil
 	}
 	return conn.Write(p)
 }

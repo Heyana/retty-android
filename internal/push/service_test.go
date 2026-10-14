@@ -461,3 +461,20 @@ func TestInstallationMigrationPreservesPendingDelivery(t *testing.T) {
 		t.Fatal("migrated event not delivered exactly once")
 	}
 }
+
+func TestCodexTitleCompletionDoesNotPush(t *testing.T) {
+	s, provider, hello, pane, _ := newFixture(t)
+	now := time.Now()
+	pane.Agent.Summary = `{"title":"提交 relaykit-bridge PR"}`
+	pane = complete(s, hello, pane)
+	s.deliver(context.Background(), now.Add(5*time.Second))
+	if len(provider.sent) != 0 || len(s.state.Pending) != 0 {
+		t.Fatal("internal title generation queued or sent a phone notification")
+	}
+	pane.Agent.Summary = "PR 已提交。"
+	pane = complete(s, hello, pane)
+	s.deliver(context.Background(), now.Add(10*time.Second))
+	if len(provider.sent) != 1 || provider.sent[0].Payload.Body != pane.Agent.Summary {
+		t.Fatal("real completion after title generation was lost", provider.sent)
+	}
+}

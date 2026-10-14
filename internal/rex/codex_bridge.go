@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -191,10 +192,15 @@ type codexEnvelope struct {
 }
 
 type codexThread struct {
-	ID     string      `json:"id"`
-	CWD    string      `json:"cwd"`
-	Parent string      `json:"parentThreadId"`
-	Status codexStatus `json:"status"`
+	ID        string      `json:"id"`
+	CWD       string      `json:"cwd"`
+	Parent    string      `json:"parentThreadId"`
+	Ephemeral bool        `json:"ephemeral"`
+	Status    codexStatus `json:"status"`
+}
+
+func (t codexThread) persistentRoot() bool {
+	return t.ID != "" && t.Parent == "" && !t.Ephemeral
 }
 
 type codexStatus struct {
@@ -208,21 +214,27 @@ type codexTurn struct {
 }
 
 type codexObserver struct {
-	mu           sync.Mutex
-	pending      map[string]string
-	pendingTurns map[string]codexTurnRequest
-	thread       codexThread
-	turn         string
-	active       bool
-	wait         string
-	finished     string // final turn status awaiting an idle thread confirmation
-	summary      string // bounded final answer for this turn only
-	emit         func(agents.HookInput)
+	mu             sync.Mutex
+	pending        map[string]codexThreadRequest
+	pendingTurns   map[string]codexTurnRequest
+	ignoredThreads []string // recent temporary/subagent threads on this CLI connection
+	thread         codexThread
+	turn           string
+	active         bool
+	wait           string
+	finished       string // final turn status awaiting an idle thread confirmation
+	summary        string // bounded final answer for this turn only
+	emit           func(agents.HookInput)
 }
 
 type codexTurnRequest struct {
 	ThreadID string `json:"threadId"`
 	CWD      string `json:"cwd"`
+}
+
+type codexThreadRequest struct {
+	Method    string
+	Ephemeral bool `json:"ephemeral"`
 }
 
 func newCodexObserver(ctx context.Context) *codexObserver {
@@ -239,7 +251,7 @@ func newCodexObserver(ctx context.Context) *codexObserver {
 			}
 		}
 	}()
-	return &codexObserver{pending: map[string]string{}, emit: func(h agents.HookInput) {
+	return &codexObserver{pending: map[string]codexThreadRequest{}, emit: func(h agents.HookInput) {
 		h.ConfigDir = configDir
 		select {
 		case events <- AgentEvent{Agent: "codex", Input: h, At: time.Now()}:
@@ -273,7 +285,12 @@ func (o *codexObserver) message(raw []byte, client bool) {
 		switch message.Method {
 		case "thread/start", "thread/resume", "thread/fork":
 			if len(message.ID) > 0 && len(o.pending) < 64 {
-				o.pending[string(message.ID)] = message.Method
+				var request codexThreadRequest
+				if len(message.Params) > 0 && json.Unmarshal(message.Params, &request) != nil {
+					return
+				}
+				request.Method = message.Method
+				o.pending[string(message.ID)] = request
 			}
 		case "turn/start", "turn/steer":
 			var request codexTurnRequest
@@ -291,6 +308,9 @@ func (o *codexObserver) message(raw []byte, client bool) {
 	// daemon notifications and failed requests must never claim another pane.
 	if request, ok := o.pendingTurns[string(message.ID)]; message.Method == "" && len(message.ID) > 0 && ok {
 		delete(o.pendingTurns, string(message.ID))
+		if slices.Contains(o.ignoredThreads, request.ThreadID) {
+			return
+		}
 		var result struct {
 			Turn   codexTurn `json:"turn"`
 			TurnID string    `json:"turnId"`
@@ -320,17 +340,29 @@ func (o *codexObserver) message(raw []byte, client bool) {
 		}
 		return
 	}
-	if method, ok := o.pending[string(message.ID)]; message.Method == "" && len(message.ID) > 0 && ok {
+	if request, ok := o.pending[string(message.ID)]; message.Method == "" && len(message.ID) > 0 && ok {
 		delete(o.pending, string(message.ID))
 		var result struct {
 			Thread codexThread `json:"thread"`
 		}
-		if json.Unmarshal(message.Result, &result) == nil && result.Thread.ID != "" && result.Thread.Parent == "" {
+		if json.Unmarshal(message.Result, &result) == nil && result.Thread.ID != "" {
+			if request.Ephemeral || !result.Thread.persistentRoot() {
+				// The TUI generates summaries and other structured output on
+				// temporary threads through this same connection. They cannot
+				// replace the pane owner, even via a successful turn/start.
+				if !slices.Contains(o.ignoredThreads, result.Thread.ID) {
+					if len(o.ignoredThreads) >= 256 {
+						o.ignoredThreads = o.ignoredThreads[1:]
+					}
+					o.ignoredThreads = append(o.ignoredThreads, result.Thread.ID)
+				}
+				return
+			}
 			o.thread, o.turn, o.active, o.wait = result.Thread, "", false, ""
 			o.summary = ""
 			o.finished = ""
 			h := agents.HookInput{Event: "SessionStart", SessionID: o.thread.ID, CWD: o.thread.CWD, Source: "startup"}
-			if method == "thread/resume" {
+			if request.Method == "thread/resume" {
 				h.Source = "resume"
 			}
 			o.emit(h)

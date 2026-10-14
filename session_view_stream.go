@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"io"
 	"sync"
+	"time"
 )
 
 // Keep the terminal reader alive across transports. Paused input is discarded,
@@ -20,6 +21,18 @@ type sessionTransport interface {
 // before its output.
 type snapshotReader interface {
 	ReadSnapshot() ([]byte, int, int, error)
+}
+
+func (s *sessionViewStream) ScreenStatus() (bool, time.Time, uint64) {
+	s.mu.Lock()
+	stream := s.current
+	s.mu.Unlock()
+	if source, ok := stream.(interface {
+		ScreenStatus() (bool, time.Time, uint64)
+	}); ok {
+		return source.ScreenStatus()
+	}
+	return false, time.Time{}, 0
 }
 
 type sessionViewStream struct {
@@ -108,6 +121,33 @@ func (s *sessionViewStream) readScreen(p []byte, snapshots bool) (int, int, int,
 		s.mu.Unlock()
 		if closed {
 			return 0, 0, 0, nil, io.EOF
+		}
+		if snapshots {
+			if source, ok := stream.(interface {
+				ScreenStatus() (bool, time.Time, uint64)
+				ReadScreenUpdate([]byte) (int, int, int, []byte, error)
+			}); ok {
+				if enabled, _, _ := source.ScreenStatus(); enabled || reset {
+					// ReadSnapshot still handles legacy initial frames atomically.
+					if enabled {
+						n, cols, rows, data, err := source.ReadScreenUpdate(p)
+						s.mu.Lock()
+						active := s.current == stream && !s.closed
+						if active && err == nil && (n > 0 || len(data) > 0) {
+							s.paused = false
+						}
+						s.mu.Unlock()
+						if !active {
+							continue
+						}
+						if err != nil {
+							s.failure(stream)
+							continue
+						}
+						return n, cols, rows, data, nil
+					}
+				}
+			}
 		}
 		if snapshots && reset {
 			if source, ok := stream.(snapshotReader); ok {

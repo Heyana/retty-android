@@ -5,6 +5,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,8 +13,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"retty/internal/rex"
+	"retty/internal/terminal/screen"
 )
 
 var version = "dev"
@@ -44,6 +47,31 @@ func helper(args []string, input io.Reader) (bool, error) {
 		return false, nil
 	}
 	switch args[0] {
+	case "-verify-update":
+		if len(args) != 1 {
+			return true, errors.New("invalid verification arguments")
+		}
+		if err := screen.Load(); err != nil {
+			return true, err
+		}
+		if err := setDataDir(""); err != nil {
+			return true, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if client, err := localClient(ctx); err == nil {
+			defer client.Close()
+			hello, err := client.Hello()
+			if err != nil {
+				return true, err
+			}
+			if !rex.CompatibleProtocol(hello.Version) {
+				return true, errors.New("new CLI cannot connect to the preserved session server")
+			}
+		}
+		return true, json.NewEncoder(os.Stdout).Encode(struct {
+			Version string `json:"version"`
+		}{version})
 	case "-gateway":
 		if len(args) != 2 {
 			return true, errors.New("invalid gateway arguments")

@@ -41,6 +41,10 @@ zsh 会话在返回提示符时清空遗留的 Kitty 键盘协议栈，防止 TU
 
 ## 常用检查
 
+可重复的生产版性能测量见 [性能基线](performance.md)。工具为每个场景创建独立会话与 GUI 数据目录，报告 GUI、会话服务、推送 worker 的 CPU、物理内存、RSS、启动峰值及原始样本。
+
+画面同步的新旧协议限速对照见 [画面同步测量](performance-baselines/2026-10-14-screen-sync.md)；它使用独立的内存传输和 Ghostty，不连接真实 daemon，也不模拟无线丢包。
+
 ```sh
 git status --short
 GOWORK=off go test ./...
@@ -79,6 +83,8 @@ RETTY_DIR="$PWD/.mygo/server-debug" GOWORK=off go run . -server
 
 ## CLI 服务器构建
 
+CLI 自身更新使用 `retty update --check` / `retty update`；桌面远端会话的命令面板 / Shell 菜单提供「更新远端 Retty…」。请求由远端桥接在独立加密控制流中处理，不转发给会话服务，不通过终端输入执行。CLI 只从固定的官方正式 Release 获取 CLI 和 SHA-256，验证完整运行时后原子切换入口，保留旧文件，关闭并 `exec` 自己的网关进程；macOS 桌面版复用 MyGo 原生更新器的共享安装任务，保持既有 Ed25519 密钥与增量 / 全量下载策略，安装后正常 `App.Relaunch`，仅重开 GUI。两者都不升级会话服务或结束 PTY/Agent。旧端先手动升级一次；桌面开发构建和不可写安装位置仍由原生更新器拒绝。详细行为与部署限制见 [自身更新](cli.md#自身更新和从桌面更新远端)。
+
 ```sh
 ./scripts/check-mygo.sh
 GOWORK=off ./scripts/build-cli.sh --platform all
@@ -86,11 +92,15 @@ GOWORK=off CGO_ENABLED=0 go test -tags retty_cli \
   ./cmd/retty ./internal/rex ./internal/remote ./internal/terminal/screen
 GOWORK=off CGO_ENABLED=0 RETTY_CLI_E2E=1 go test -tags retty_cli \
   ./cmd/retty -run '^TestCLIServerLifecycle$' -count=1 -timeout 3m
+GOWORK=off CGO_ENABLED=0 RETTY_CLI_E2E=1 RETTY_CLI_BINARY="$PWD/build/cli/retty-darwin-arm64/retty" \
+  go test -tags retty_cli ./cmd/retty -run '^TestGatewayUpdateExec' -count=1 -timeout 2m
 ```
 
 `cmd/retty` 使用 `retty_cli` 标签，独立于 MyGo UI，不使用桌面生产标志；打包脚本验证依赖里没有图形运行时，并将固定 manifest 的 Ghostty VT 动态库校验后放在二进制旁。`build/cli/` 包含 Linux/macOS × amd64/arm64 的 tar.gz 和 SHA-256 文件。Linux CLI 不依赖 X11、Wayland 或 GUI 会话，当前动态库依赖 glibc，不提供 musl/Alpine 构建。
 
 隔离的 CLI E2E 使用自己的数据目录、服务进程和 shell，验证真实加密隧道、新建会话、输入回显、双端尺寸接管、网关退出保留会话及重连身份。在 Linux 覆盖 `serve` 命令返回后网关继续运行、重复启动复用 PID、`stop` 保留会话及后台 daemon 启动；macOS 使用 `--foreground` 和测试自行启动的会话服务，避免注册测试 launchd job。可用 `RETTY_CLI_BINARY=/absolute/path/retty` 指向已打包的二进制，无需测试内重复构建。
+
+更新的 exec E2E 使用测试专用下载/传输替身，但真实运行管理 socket、进程清理、`exec`、独立会话服务和 PTY，核对网关 PID、会话服务 PID、会话 ID、shell PID 和尺寸不变。下载、SHA-256、归档限制、失败保留旧安装、运行时探测和独立 Tailcat 扩展另有 fixture 测试；此用例不下载或更新真实安装。
 
 `retty serve`（或 `retty`、`retty start`）默认启动后台常驻加密网关并返回，复用已有实例。`retty stop` 只停止网关，不向会话服务发送 `shutdown`；`--foreground` 用于 systemd 等进程管理器，SIGINT/SIGTERM 同样保留会话。管理 socket 为 0600，锁覆盖启动/运行/清理过程，阻止并发实例争用连接身份。默认状态目录是用户配置目录的 `RettyServer`，与已安装桌面应用隔离。用同一份数据目录重启网关会保留 identity 和当前服务；不要为了更新 CLI 结束已有 Agent 任务。安装、运行和 systemd 用户服务示例见 [cli.md](cli.md)。
 
@@ -99,6 +109,10 @@ GOWORK=off CGO_ENABLED=0 RETTY_CLI_E2E=1 go test -tags retty_cli \
 ### 桌面自动更新
 
 Retty 使用 MyGo 原生 updater 插件。菜单 **Retty → 检查更新…** 和命令面板均可打开更新窗口；默认启动约 10 秒后检查一次，之后每天检查，发现新版本时显示更新说明。下载、验签、安装、跳过版本和重新启动均由 MyGo 处理。应用重启仍走普通退出流程，只保存布局并脱离终端连接，不结束会话服务、推送 worker 或 Agent 任务。后台服务、CLI hook 和 iOS 不初始化 updater。
+
+另一台已配对的 Retty 桌面可从远端会话的「更新远端 Retty…」入口调用同一个原生更新任务。远端检查后确认具体版本，安装任务独立于发起端的控制流；本机窗口正在安装同一版本时共享该任务，本机取消仍有效，不重复下载或并发替换应用。安装成功先保存 `desktop-update.json` 回执，再正常重开远端 GUI。旧版桥接先手动升级一次以获得此入口。
+
+Retty 启用 MyGo 的 `SetKeepPreviousBundles(true)`，将替换的 macOS 包保留在应用旁的隐藏 `.Retty.app.old-<GUI PID>` 路径，供仍运行的后台进程使用资源；不自动清理这些包。任务完成且确认对应进程不再使用后才可清理，不通过批量结束后台进程回收空间。
 
 `mygo.json.updates` 固定 GitHub 来源 `daodao97/retty` 和 Ed25519 公钥。私钥保存在 `~/Documents/Retty-签名与发布备份/MyGo-自动更新/mygo-update.key`，GitHub Actions Secret 为 `MYGO_UPDATER_PRIVATE_KEY`；配套 README 说明恢复方法。不要重新生成或替换密钥，否则已有应用会拒绝新更新。
 
@@ -332,6 +346,14 @@ Retty 的 Tailcat 隧道包含 Apple 系统之外的加密实现。目前省略�
 
 ## 隔离的远程连接与真机测试
 
+远程手机及桌面查看器请求可协商的 `screen_sync` 模式，版本号和最低协议版本保持 6/4。旧 daemon 忽略新 attach 字段，继续返回原始 ANSI 或带尺寸的字节帧；新 daemon 的 `Hello.screen_sync` 和 attach 回复广告支持。只更新 GUI 不会升级正在运行的 daemon，旧端继续原模式；等真实任务结束，在正常服务维护中更新 daemon，禁止为了激活这项能力重启正在运行的服务。
+
+新模式首帧只序列化可见网格。画面帧携带尺寸、递增序号与服务端版本，后续基于已确认快照发送完整状态或字节差分；客户端先重建完整 VT 再原子替换模拟器，下次读取才确认上一帧已消费。每个查看器最多一帧未确认、一个 dirty 唤醒标记，发送间隔依据交付和确认耗时调整，最低 16ms。快照上限 4MiB；写入或确认超过 15 秒只关闭该 attachment。输入仍有序写入 PTY、不做离线重放或预测回显。桌面独立的输入/尺寸 attachment 同时请求 `input_only`，首帧之后不再重复传终端输出。
+
+新服务端统一使用 headless Ghostty VT 保存状态；没有传统字节查看器时由服务端直接回复终端查询，传统查看器在场时保留原来的回复方式。响铃、OSC 52 写剪贴板和桌面通知通过独立的有界一次性事件队列传递，不能像过时画面一样丢弃；事件积压超限只断开慢查看器。程序的 DEC 2026 绘制事务提交后才发送画面，停止输出的未结束事务使用 250ms 的观察超时；原子状态帧不把绘制锁带到客户端。每 2 秒有画面心跳，静默会话正常确认；超过 5 秒没有完整画面确认时显示更新延迟，旧端不会因没有输出而显示该提示。
+
+新模式的滚动历史通过独立只读快照查看：桌面命令面板 / View 菜单选择「查看终端历史…」，手机终端页右上角历史按钮。初始请求最多 512 行历史，再按需扩大到 2048 / 8192 行；回复最多 8MiB，15 秒超时。历史请求独占一个可取消的控制连接，不阻塞主控制轮询或画面确认；历史弹层不附着 PTY、不输入、不调整尺寸、不把当前任务结果标为已读。Live 画面的后续更新不改变正在阅读的历史快照，关闭释放自己的请求和模拟器；历史弹层中的关闭窗格 / Tab 快捷键只关闭弹层。
+
 Tailcat 隧道首次 TCP 拨号成功后，即在后台使用 `DiscoPing` 尝试直连；手机首页的预连接也启动探测，点击连接后复用同一个探测 worker 和已有路径指标。失败或中继时先以 2、4、8、16 秒间隔重试，然后每 30 秒检查一次，直连成功后直接进入 30 秒间隔；单次 3 秒超时，不阻塞连接初始化或创建终端 attachment。所有活动及预连接隧道共用一个按需启动的网络监听器，接口/地址变化或系统唤醒时立即唤醒探测并重置短间隔重试；已建立隧道上的新拨号也唤醒探测，不重建隧道或会话。最近连接的指标弹层打开时最多每 10 秒额外采样一次，与后台探测串行共享同一隧道。探测随隧道关闭取消，不依赖短暂的拨号 context，也不会触发会话重连；最后一个探测 worker 退出时关闭网络监听器。请求耗时、中位数/P95、超时、重连和画面恢复统计来自已有轮询与恢复流程，仅在内存保留最近 5 分钟、最多各 256 条记录。正常切 tab 后保活到期的接入不计为异常画面恢复；请求耗时包含远端处理时间，超时次数不代表网络丢包。手机连接诊断保持原有流程。
 
 Tailcat 服务端会永久保留每个连接过的节点密钥，并在每次新连接时向所有历史对端发送端点通告。因此每台设备在数据目录（桌面 `remote/client-secret`）或 Keychain（手机 `tunnel-secret`）保存一个私有种子，按桌面派生 4 个固定密钥槽：新隧道选用一个既未在用、又已关闭超过 10 秒的槽（刚关闭的密钥在桌面端仍信任旧的直连 UDP 路径，立即复用会让握手等待 WireGuard 5 秒重试），槽都不可用时才退回临时密钥。种子载入前、CLI 和测试仍使用临时密钥。手机首页的在线探测成功后，隧道会保留 45 秒，下一次探测或点击连接直接在其上建立控制连接；离线桌面的探测间隔从 30 秒逐步退避到 5 分钟，进入后台时关闭保留的隧道。手机同样在后台做直连探测。从后台恢复时，保留的控制连接 2 秒内无响应就在同一隧道上并行重拨，取先成功者。`list` 响应带 ETag，内容未变时只回 ETag 不回列表；这是新增字段，旧版两端会忽略，不需要提升协议版本。
@@ -382,7 +404,7 @@ xcrun devicectl device process launch --device "$IOS_DEVICE" --terminate-existin
 
 本机读取与远端读取共用 `internal/files` 的只读服务；远端 `files-browse` 请求由已认证 Tailcat 连接上的 Bridge / CLI 网关直接处理，不送入 PTY daemon，也不发送终端输入或取得尺寸控制。并发最多 4 个，请求可取消；旧桥接返回明确的升级提示，离线远端不会退回本地目录。连接码沿用已有整机访问权限，文件操作使用桥接进程的操作系统用户权限。仅新增桥接能力，无需提升会话协议或重启真实 daemon。
 
-Git 预览使用只读命令显示工作区（含已暂存修改）相对 HEAD 的单文件变更；未跟踪文件和首次提交前的文件按新增文件显示。禁用外部 diff、textconv、fsmonitor、pager 和可选索引锁，不暂存、提交或执行项目脚本。代码语法高亮使用 [Chroma v2](https://github.com/alecthomas/chroma) 按文件名识别语言，在预览 worker 中一次解析并缓存 token；渲染使用 MyGo `RichText`，主题切换只改变配色。Diff 的每个 hunk 分别重建旧、新代码进行解析，避免删除行的词法状态污染新增行。保持复制的原始内容不变；高亮范围限制为 1MB / 200000 token，取消、超限、无法识别或词法器失败时保留纯文本预览。展示参考 [egoist/godiff](https://github.com/egoist/godiff) 的 `diffview.go`、`internal/diff/diff.go`（`ff30a21259e971b51f36480aec1b6f51f9a575b9`）：虚拟行列表、双行号和增删行背景；实现独立，不依赖其主程序或更换 MyGo 版本。
+Git 预览使用只读命令显示工作区（含已暂存修改）相对 HEAD 的单文件变更；未跟踪文件和首次提交前的文件按新增文件显示。禁用外部 diff、textconv、fsmonitor、pager 和可选索引锁，不暂存、提交或执行项目脚本。代码预览使用 MyGo 官方 [`ui/editor.View`](https://mygo.egoist.dev/docs/ui/code-editor)，以只读模式提供语法高亮、行号、折叠、查找、横向滚动及跨行选择复制。Diff 使用同包的 [`DiffView`](https://mygo.egoist.dev/docs/ui/diff-viewer) 和 `SetPatch` 显示服务返回的单文件补丁，保留原文件行号和行内变更高亮；不启用编辑、接受或回退操作。组件状态随已加载的预览保留，放大预览复用它；主题与窗口明暗模式同步。未知语言保留纯文本，不再限制展示行数或截断超长行；读取范围仍为初始 256KB、按需加载到最多 4MB。预览菜单复制已加载的原始字节内容，保留制表符和 CRLF；图片、二进制提示及下载沿用既有流程。
 
 ## 弹层和命令面板
 
@@ -390,11 +412,13 @@ Git 预览使用只读命令显示工作区（含已暂存修改）相对 HEAD �
 
 已读和通知投递回执分开保存，事件身份沿用 `AgentNoticeID`。新会话服务通过 `Hello.attention` 广告已读能力，`markAttention` 仅接受当前事件的 ID，已读结果随 `list` 在桌面/手机之间同步；源服务原子保存到 `attention-seen.json`，不触碰 PTY、尺寸或输入。旧服务降级到客户端的 256 条已读记录，继续沿用桌面 `inbox-seen.json`、手机 SecureStore `inbox-seen-v1` 的存储键，保留既有回执；旧服务不能跨端同步。
 
-Codex 只从当前根线程、当前轮的 `item/completed` 最终回复生成摘录，仍等明确的完成/空闲事件确认结束；Claude Code 使用 Stop/StopFailure 的 `last_assistant_message`。摘录为首个正文句，最多 160 字符，不包括代码块，不调用模型，不保留完整回复。新一轮会清除旧摘录；没有最终回复时沿用任务说明。桌面、远端提醒与 APNs 共用 `AgentNoticeBody`。需要源服务、对应 hook/proxy 和推送 worker 支持新字段；GUI 更新不会升级已有后台进程，不为了启用摘要或已读同步重启真实任务。Agent 恢复记录同时保存事件序号，重启电脑后继续递增，避免旧已读/通知回执吞掉恢复后的下一轮结果。
+Codex 只从当前根线程、当前轮的 `item/completed` 最终回复生成摘录，仍等明确的完成/空闲事件确认结束；Claude Code 使用 Stop/StopFailure 的 `last_assistant_message`。Codex TUI 会通过同一连接创建 `ephemeral` 临时线程生成旧对话摘要等结构化内容；proxy 和 metadata watcher 不允许临时线程或子 Agent 接管窗格、生成完成通知，即使它们的 `turn/start` / `turn/steer` 请求成功。摘录为首个正文句，最多 160 字符，不包括代码块，不调用模型，不保留完整回复。新一轮会清除旧摘录；没有最终回复时沿用任务说明。桌面、远端提醒与 APNs 共用 `AgentNoticeBody`。需要源服务、对应 hook/proxy 和推送 worker 支持新字段；GUI 更新不会升级已有后台进程，不为了启用摘要或已读同步重启真实任务。Agent 恢复记录同时保存事件序号，重启电脑后继续递增，避免旧已读/通知回执吞掉恢复后的下一轮结果。
 
 本地控制轮询仍为 500ms，维护和重连检查照常执行；相同快照不再请求重建界面。输出、状态、摘要、已读、尺寸变化及未完成的窗格维护仍请求刷新，终端输出和输入继续自行失效。隔离用例 `TestIdlePollFramesAndLifecycleMaintenance` 的 20 次相同快照从原先 20 次刷新请求降到初始化的 1 次。Apple M3 上 `BenchmarkIdleSnapshotComparison`（200ms）的 1/32/100 个会话约为 110ns/2.7µs/8.3µs，均零分配；这是快照比较成本，不能换算为整机 CPU 降幅。复现：`GOWORK=off go test . -run '^$' -bench BenchmarkIdleSnapshotComparison -benchtime=200ms`。
 
 命令面板通过 MyGo `ComboboxBase.Inline` 在原布局内显示选项；MyGo 负责高亮、上下键、点击/回车选择、无障碍和高亮变化时的滚动。Retty 保留模糊筛选、稳定的命令/窗格 ID 和执行动作。Esc 或点外部关闭后恢复终端焦点，命令主动打开搜索框时保留该搜索框的焦点。
+
+命令面板输入 `ssh` 列出本机 `~/.ssh/config` 中的具体 `Host` 别名，输入 `ssh <关键词>` 按别名模糊筛选，回车或点击在新的本机标签页运行 `ssh -- <别名>`。即使当前标签页连接另一台 Retty 电脑，也使用本机配置和会话服务。主机列表每次打开面板异步重新读取；支持一行多个别名、引号、注释、去重，以及 `Include` 的绝对路径、相对 `~/.ssh` 路径、`~/` 和 glob；忽略通配和否定的 Host 模式，不执行 `Match exec`。这里只发现别名，连接时的用户名、端口、密钥、跳板和条件配置由 OpenSSH 自己解析（[配置格式](https://man.openbsd.org/ssh_config)）。
 
 手机设备重命名、会话编辑及结束确认使用 MyGo `DialogBase.Dismissed()`，统一处理 Esc、点外部和按钮关闭后的键盘收尾。取消不保存草稿；设备重命名取消后返回会话列表设置。连接指标使用 `PopoverBase.Dismissed()` 清理当前弹层标记。
 

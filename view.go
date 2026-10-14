@@ -41,6 +41,8 @@ func (a *App) view(c *ui.Context) {
 	a.desktopConnectionDialog(c, k)
 	a.expandedFilePreview(c, k)
 	a.fileDirectoryDialog(c, k)
+	a.terminalHistory.view(c)
+	a.remoteUpdateView(c, k)
 	if a.saveDue && time.Since(a.lastSave) > time.Second {
 		a.save()
 	}
@@ -331,7 +333,7 @@ func (a *App) remotePaneStatus(c *ui.Context, p *Pane) string {
 		return ""
 	}
 	if p.remoteView.readReady() {
-		return ""
+		return screenFreshness(c, p.remoteView)
 	}
 	if p.remoteView.hasTransport() {
 		remaining := remoteLoadingDelay - c.Now().Sub(p.remoteLoadingSince)

@@ -134,3 +134,9 @@ targets in HTML but not VT, so the Go binding pairs both formats by exact
 text positions, retaining duplicate labels, Unicode and history targets.
 Retty mirrors the fix in both full and recent-history snapshots; native
 library manifests and iOS/CLI packaging remain unchanged.
+
+Fork commit `c8fd199` merges upstream through v0.4.8 (`c0e1068`), including
+`ui/editor` for code and diff previews. The terminal adds an optional `OnScroll`
+callback for application-owned remote history; Retty keeps its existing screen
+transport and local terminal extensions. The Ghostty manifest is unchanged,
+so the local CLI/iOS library packaging and snapshot/link fixes remain applicable.

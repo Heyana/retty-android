@@ -48,6 +48,7 @@ var (
 	cmdSmaller     = command{Title: "Smaller Text", Accel: "CmdOrCtrl+-", Keys: "⌘−", Run: func(a *App) { a.setFontSize(termFont.Size - 1) }}
 	cmdActualSize  = command{Title: "Actual Size", Accel: "CmdOrCtrl+0", Keys: "⌘0", Run: func(a *App) { a.setFontSize(defaultFontSize) }}
 	cmdFind        = command{Title: "Find…", Accel: "CmdOrCtrl+F", Keys: "⌘F", Run: func(a *App) { a.openFind() }}
+	cmdHistory     = command{Title: "查看终端历史…", Run: func(a *App) { a.openTerminalHistory() }}
 	cmdFindNext    = command{Title: "Find Next", Accel: "CmdOrCtrl+G", Keys: "⌘G", Run: func(a *App) { a.findStep(1) }}
 	cmdFindPrev    = command{Title: "Find Previous", Accel: "CmdOrCtrl+Shift+G", Keys: "⇧⌘G", Run: func(a *App) { a.findStep(-1) }}
 	cmdLight       = command{Title: "Appearance: Light", Run: func(a *App) { a.setAppearance("light") }}
@@ -61,6 +62,7 @@ var paletteCommands = []*command{
 	&cmdFiles,
 	&cmdSettings,
 	&cmdCheckUpdates,
+	&cmdUpdateRemote,
 	&cmdNewTab, &cmdSplitRight, &cmdSplitDown, &cmdZoom, &cmdEqualize, &cmdClosePane, &cmdCloseTab,
 	&cmdNextTab, &cmdPrevTab, &cmdRenameTab,
 	&cmdFocusLeft, &cmdFocusRight, &cmdFocusUp, &cmdFocusDown,
@@ -68,6 +70,7 @@ var paletteCommands = []*command{
 	&cmdBigger, &cmdSmaller, &cmdActualSize, &cmdLight, &cmdDark, &cmdSystem,
 	&cmdClearScroll, &cmdRestart, &cmdEndAll,
 	&cmdFind, &cmdFindNext, &cmdFindPrev,
+	&cmdHistory,
 }
 
 // menu builds the menu bar, whose items run commands in the window.
@@ -129,6 +132,7 @@ func (a *App) menu() *mygo.Menu {
 			item(&cmdCloseTab),
 			mygo.Separator(),
 			item(&cmdRestart),
+			item(&cmdUpdateRemote),
 			item(&cmdEndAll),
 		}},
 		{Label: "Edit", Submenu: []*mygo.MenuItem{
@@ -146,6 +150,7 @@ func (a *App) menu() *mygo.Menu {
 		}},
 		{Label: "View", Submenu: []*mygo.MenuItem{
 			item(&cmdFiles),
+			item(&cmdHistory),
 			item(&cmdPalette),
 			item(&cmdPalette2),
 			mygo.Separator(),
@@ -207,12 +212,28 @@ func (a *App) run(cmd *command) {
 }
 
 func (a *App) closeFocused() {
+	if a.remoteUpdate != nil && a.remoteUpdate.open {
+		a.remoteUpdate.open = false
+		return
+	}
+	if a.terminalHistory != nil && a.terminalHistory.open {
+		a.terminalHistory.close()
+		return
+	}
 	if t := a.tab(); t != nil && t.Focus != nil {
 		a.closePane(t.Focus)
 	}
 }
 
 func (a *App) closeActiveTab() {
+	if a.remoteUpdate != nil && a.remoteUpdate.open {
+		a.remoteUpdate.open = false
+		return
+	}
+	if a.terminalHistory != nil && a.terminalHistory.open {
+		a.terminalHistory.close()
+		return
+	}
 	if t := a.tab(); t != nil {
 		a.closeTab(t)
 	}
@@ -233,6 +254,9 @@ func (a *App) startRename() {
 }
 
 func (a *App) clearFocused() {
+	if a.terminalHistory != nil && a.terminalHistory.open {
+		return
+	}
 	if t := a.tab(); t != nil && t.Focus != nil && t.Focus.term != nil {
 		// Clear the scrollback and the screen, and have the shell draw
 		// its prompt again, as Command-K does in Terminal.
@@ -254,6 +278,9 @@ func (a *App) clearFocused() {
 // restartFocused ends the focused pane's session and starts a shell in
 // its place, in the same directory.
 func (a *App) restartFocused() {
+	if a.terminalHistory != nil && a.terminalHistory.open {
+		return
+	}
 	t := a.tab()
 	if t == nil || t.Focus == nil {
 		return
@@ -285,9 +312,13 @@ func (a *App) quitAndEnd() {
 }
 
 func (a *App) openPalette() {
+	if a.terminalHistory != nil && a.terminalHistory.open {
+		a.terminalHistory.close()
+	}
 	a.settingsOpen = false
 	a.paletteOpen, a.paletteQuery = true, ""
 	a.focusReq = nil // the palette takes the focus
+	a.loadPaletteSSH()
 }
 
 // shortcuts also handles tab navigation in views without a native menu.
@@ -298,7 +329,7 @@ func (a *App) shortcuts(c *ui.Context) {
 		a.openSettings()
 		c.Invalidate()
 	}
-	if a.settingsOpen || a.desktops.open || a.files != nil && (a.files.expanded || a.files.pathEditing) {
+	if a.settingsOpen || a.desktops.open || a.remoteUpdate != nil && a.remoteUpdate.open || a.terminalHistory != nil && a.terminalHistory.open || a.files != nil && (a.files.expanded || a.files.pathEditing) {
 		return
 	}
 	if !a.paletteOpen && c.Shortcut(ui.Shift|ui.Cmd, ui.KeyE) {
@@ -343,6 +374,9 @@ type paletteItem struct {
 }
 
 func (a *App) paletteItems() []paletteItem {
+	if query, ok := sshPaletteQuery(a.paletteQuery); ok {
+		return a.sshPaletteItems(query)
+	}
 	var items []paletteItem
 	q := strings.ToLower(strings.TrimSpace(a.paletteQuery))
 	match := func(s string) bool { return q == "" || fuzzy(strings.ToLower(s), q) }
@@ -400,7 +434,7 @@ func (a *App) palette(c *ui.Context, k *colors) {
 		ui.Row(c).Padding(12, 16).Gap(10).AlignItems(ui.Center).BorderWidth(0, 0, 1, 0).BorderColor(k.panelBorder).Children(func() {
 			ui.Icon(c, icon("search")).Size(17, 17).TextColor(k.textFaint)
 			choices = ui.ComboboxBase(c.Key("palette-input"), &a.paletteQuery)
-			choices.Input.Label("Search commands").Grow(1).FontSize(15).Placeholder("Type a command, or the name of a pane…").AutoFocus()
+			choices.Input.Label("Search commands").Grow(1).FontSize(15).Placeholder("Type a command, a pane name, or ssh…").AutoFocus()
 		})
 		var items []paletteItem
 		choices.Inline(func(list ui.Element) {
@@ -410,7 +444,7 @@ func (a *App) palette(c *ui.Context, k *colors) {
 			listH := float32(min(max(len(items), 1)*34+12, 384))
 			ui.Scroll(c.Key("palette-options")).Height(listH).Padding(6).Children(func() {
 				if len(items) == 0 {
-					ui.Text(c, "No matches").FontSize(13).TextColor(k.textFaint).Padding(14)
+					ui.Text(c, a.paletteEmptyMessage()).FontSize(13).TextColor(k.textFaint).Padding(14)
 				}
 				for _, it := range items {
 					row := choices.Item(it.id).Key(it.id).Label(it.title).Height(34).Padding(0, 10).Gap(10).Radius(8).AlignItems(ui.Center).Cursor(ui.CursorPointer)

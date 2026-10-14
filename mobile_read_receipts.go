@@ -10,6 +10,7 @@ import (
 
 func (m *mobileApp) resultTerminalVisible() bool {
 	return m.term != nil && !m.background && !m.home && (m.win == nil || m.screenActive) &&
+		(m.terminalHistory == nil || !m.terminalHistory.open) &&
 		!m.connectionDetailsOpen && !m.connectionDiagnosticsOpen &&
 		!m.sessionSettingsOpen && !m.editingOpen && !m.endingOpen && !m.deviceNameOpen
 }

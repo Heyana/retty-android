@@ -36,3 +36,18 @@ func TestAgentNoticeBodyFallsBackHonestlyWithoutTaskMetadata(t *testing.T) {
 		}
 	}
 }
+
+func TestAgentNoticeBodyDecodesStructuredSummaryFromOldServers(t *testing.T) {
+	for _, state := range []string{agents.Completed, agents.Failed} {
+		for _, summary := range []string{`{"summary":"relay 已收敛为统一转发流程。测试通过。"}`, `{"summary":"relay 已收敛为统一转发流程。`} {
+			s := SessionInfo{Title: "整理 relay", Agent: AgentState{State: state, Summary: summary}}
+			if got := AgentNoticeBody("", s); got != "relay 已收敛为统一转发流程。" {
+				t.Fatal("notification exposed JSON", got)
+			}
+		}
+		s := SessionInfo{Title: "整理 relay", Agent: AgentState{State: state, Summary: `{"summary":42}`}}
+		if got := AgentNoticeBody("", s); got != "任务：整理 relay" {
+			t.Fatal("invalid structured summary did not fall back to the task", got)
+		}
+	}
+}

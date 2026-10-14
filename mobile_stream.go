@@ -24,9 +24,9 @@ func (m *mobileApp) sessionStream(sid string, lock bool) *rex.Stream {
 			cols, rows = m.term.Size()
 		}
 		m.lockOwner = newSizeLockOwner()
-		return m.client.LockStreamAfter(sid, m.lockOwner, mobileDevice().Name, cols, rows, m.lockRelease)
+		return m.client.LockStreamAfter(sid, m.lockOwner, mobileDevice().Name, cols, rows, m.lockRelease).PreferScreenSync(false)
 	}
-	return m.client.ViewStream(sid)
+	return m.client.ViewStream(sid).PreferScreenSync(false)
 }
 
 func (m *mobileApp) releaseSizeLock() bool {

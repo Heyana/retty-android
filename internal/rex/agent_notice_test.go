@@ -53,3 +53,32 @@ func TestLegacyCompletionNeedsNewCompletionAfterInput(t *testing.T) {
 		t.Fatal("duplicate hook changed the anchored completion", duplicate.Agent)
 	}
 }
+
+func TestAgentTitleCompletionDoesNotNeedAttention(t *testing.T) {
+	previous := SessionInfo{Agent: AgentState{ID: "codex", SessionID: "thread", State: "running"}}
+	title := previous
+	title.Agent.State, title.Agent.CompletionRevision = "completed", 1
+	title.Agent.Summary = `{"title":"提交 relaykit-bridge PR"}`
+	if AgentNoticeState(title) || AgentNoticeTransition(previous, title) || AttentionState(title) {
+		t.Fatal("internal title generation requested attention")
+	}
+	for _, tc := range []struct{ name, agent, state, source, summary string }{
+		{"real result", "codex", "completed", "", "PR 已提交。"},
+		{"failure", "codex", "failed", "", title.Agent.Summary},
+		{"other agent", "claude", "completed", "", title.Agent.Summary},
+		{"program status", "codex", "completed", ProgramStatusSource, title.Agent.Summary},
+		{"other structured output", "codex", "completed", "", `{"title":"PR","url":"https://example.com/pr"}`},
+		{"invalid JSON", "codex", "completed", "", `{"title":"PR"`},
+		{"non-string title", "codex", "completed", "", `{"title":123}`},
+		{"empty title", "codex", "completed", "", `{"title":" "}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			next := title
+			next.Agent.ID, next.Agent.State, next.Agent.Source, next.Agent.Summary = tc.agent, tc.state, tc.source, tc.summary
+			next.Agent.CompletionRevision++
+			if !AgentNoticeState(next) || !AgentNoticeTransition(title, next) {
+				t.Fatal("normal result suppressed after a naming task")
+			}
+		})
+	}
+}

@@ -20,7 +20,7 @@ import (
 func TestCodexBridgeOnlyTracksItsCLIThread(t *testing.T) {
 	var tracker agentTracker
 	var events []agents.HookInput
-	o := &codexObserver{pending: map[string]string{}, emit: func(h agents.HookInput) {
+	o := &codexObserver{pending: map[string]codexThreadRequest{}, emit: func(h agents.HookInput) {
 		events = append(events, h)
 		tracker.apply(AgentEvent{Agent: "codex", Input: h, At: time.Now()})
 	}}
@@ -92,7 +92,7 @@ func TestCodexBridgeOnlyTracksItsCLIThread(t *testing.T) {
 func TestCodexBridgeKeepsSameDirectoryPanesIndependent(t *testing.T) {
 	for _, id := range []string{"first", "second"} {
 		var seen []agents.HookInput
-		o := &codexObserver{pending: map[string]string{}, emit: func(h agents.HookInput) { seen = append(seen, h) }}
+		o := &codexObserver{pending: map[string]codexThreadRequest{}, emit: func(h agents.HookInput) { seen = append(seen, h) }}
 		o.message([]byte(`{"id":1,"method":"thread/start"}`), true)
 		bound, _ := json.Marshal(map[string]any{"id": 1, "result": map[string]any{"thread": map[string]string{"id": id, "cwd": "/same"}}})
 		o.message(bound, false)
@@ -110,7 +110,7 @@ func TestCodexBridgeBindsContinuedThreadFromSuccessfulTurnRequest(t *testing.T) 
 	for _, method := range []string{"turn/start", "turn/steer"} {
 		t.Run(method, func(t *testing.T) {
 			var tracker agentTracker
-			o := &codexObserver{pending: map[string]string{}, emit: func(h agents.HookInput) {
+			o := &codexObserver{pending: map[string]codexThreadRequest{}, emit: func(h agents.HookInput) {
 				tracker.apply(AgentEvent{Agent: "codex", Input: h, At: time.Now()})
 			}}
 			o.message([]byte(`{"id":1,"method":"thread/start"}`), true)
@@ -148,6 +148,68 @@ func TestCodexBridgeBindsContinuedThreadFromSuccessfulTurnRequest(t *testing.T) 
 				t.Fatal("failed turn request replaced the pane owner")
 			}
 		})
+	}
+}
+
+func TestCodexBridgeIgnoresTemporaryStructuredTasks(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		request string
+		thread  string
+	}{
+		{"response metadata", `{}`, `{"id":"temporary","ephemeral":true}`},
+		{"request metadata", `{"ephemeral":true}`, `{"id":"temporary"}`},
+		{"subagent", `{}`, `{"id":"temporary","parentThreadId":"own"}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var tracker agentTracker
+			var events []agents.HookInput
+			o := &codexObserver{pending: map[string]codexThreadRequest{}, emit: func(h agents.HookInput) {
+				events = append(events, h)
+				tracker.apply(AgentEvent{Agent: "codex", Input: h, At: time.Now()})
+			}}
+			message := func(client bool, raw string) { t.Helper(); o.message([]byte(raw), client) }
+			message(true, `{"id":1,"method":"thread/start"}`)
+			message(false, `{"id":1,"result":{"thread":{"id":"own","cwd":"/project"}}}`)
+			message(false, `{"method":"turn/started","params":{"threadId":"own","turn":{"id":"live"}}}`)
+			before := tracker.state
+			count := len(events)
+			message(true, `{"id":"temporary-structured","method":"thread/start","params":`+tc.request+`}`)
+			message(false, `{"id":"temporary-structured","result":{"thread":`+tc.thread+`}}`)
+			for _, method := range []string{"turn/start", "turn/steer"} {
+				message(true, `{"id":"temporary-turn","method":"`+method+`","params":{"threadId":"temporary"}}`)
+				message(false, `{"id":"temporary-turn","result":{"turn":{"id":"summary-turn"},"turnId":"summary-turn"}}`)
+			}
+			message(false, `{"method":"turn/started","params":{"threadId":"temporary","turn":{"id":"summary-turn"}}}`)
+			message(false, `{"method":"item/completed","params":{"threadId":"temporary","turnId":"summary-turn","item":{"type":"agentMessage","text":"{\"summary\":\"旧对话的摘要。\"}"}}}`)
+			message(false, `{"method":"turn/completed","params":{"threadId":"temporary","turn":{"id":"summary-turn","status":"completed"}}}`)
+			message(false, `{"method":"thread/status/changed","params":{"threadId":"temporary","status":{"type":"idle"}}}`)
+			if !tracker.state.Equal(before) || len(events) != count || o.thread.ID != "own" || len(o.pendingTurns) != 0 || len(o.pending) != 0 {
+				t.Fatalf("temporary task changed pane state: %+v", tracker.state)
+			}
+			message(false, `{"method":"item/completed","params":{"threadId":"own","turnId":"live","item":{"type":"agentMessage","text":"真实任务已完成。"}}}`)
+			message(false, `{"method":"turn/completed","params":{"threadId":"own","turn":{"id":"live","status":"completed"}}}`)
+			message(false, `{"method":"thread/status/changed","params":{"threadId":"own","status":{"type":"idle"}}}`)
+			if tracker.state.SessionID != "own" || tracker.state.CompletionRevision != 1 || tracker.state.Summary != "真实任务已完成。" {
+				t.Fatalf("real completion lost after temporary task: %+v", tracker.state)
+			}
+		})
+	}
+}
+
+func TestCodexMetadataWatchIgnoresTemporaryThreads(t *testing.T) {
+	for _, thread := range []codexThread{
+		{ID: "temporary", Ephemeral: true},
+		{ID: "child", Parent: "own"},
+	} {
+		o := &codexObserver{emit: func(h agents.HookInput) { t.Fatalf("non-root snapshot emitted %+v", h) }}
+		thread.Status = codexStatus{Type: "active"}
+		o.snapshot(thread, codexTurn{ID: "summary-turn", Status: "inProgress"})
+		thread.Status = codexStatus{Type: "idle"}
+		o.snapshot(thread, codexTurn{ID: "summary-turn", Status: "completed"})
+		if o.thread.ID != "" {
+			t.Fatal("temporary snapshot bound pane")
+		}
 	}
 }
 
@@ -192,7 +254,7 @@ func TestCodexMetadataWatchIgnoresHistoricalCompletion(t *testing.T) {
 
 func TestCodexBridgeUnknownCompletionKeepsObserving(t *testing.T) {
 	var tracker agentTracker
-	o := &codexObserver{pending: map[string]string{}, emit: func(h agents.HookInput) {
+	o := &codexObserver{pending: map[string]codexThreadRequest{}, emit: func(h agents.HookInput) {
 		tracker.apply(AgentEvent{Agent: "codex", Input: h, At: time.Now()})
 	}}
 	o.message([]byte(`{"id":1,"method":"thread/start"}`), true)
@@ -208,7 +270,7 @@ func TestCodexBridgeUnknownCompletionKeepsObserving(t *testing.T) {
 
 func TestCodexBridgeContinuationDoesNotAnnounceIntermediateCompletion(t *testing.T) {
 	var tracker agentTracker
-	o := &codexObserver{pending: map[string]string{}, emit: func(h agents.HookInput) {
+	o := &codexObserver{pending: map[string]codexThreadRequest{}, emit: func(h agents.HookInput) {
 		tracker.apply(AgentEvent{Agent: "codex", Input: h, At: time.Now()})
 	}}
 	message := func(value string) { o.message([]byte(value), false) }

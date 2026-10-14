@@ -99,7 +99,7 @@ func pollCodexThread(ctx context.Context, socket, thread string, parent int, obs
 		if err := call("thread/read", map[string]any{"threadId": thread, "includeTurns": false}, &metadata); err != nil {
 			return err
 		}
-		if metadata.Thread.ID != thread || metadata.Thread.Parent != "" {
+		if metadata.Thread.ID != thread || !metadata.Thread.persistentRoot() {
 			return errors.New("not the requested root thread")
 		}
 		var turn codexTurn
@@ -117,6 +117,9 @@ func pollCodexThread(ctx context.Context, socket, thread string, parent int, obs
 }
 
 func (o *codexObserver) snapshot(thread codexThread, turn codexTurn) {
+	if !thread.persistentRoot() {
+		return
+	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
 	if o.thread.ID == "" {

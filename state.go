@@ -96,6 +96,9 @@ type Pane struct {
 
 // App is the state of Retty's window.
 type App struct {
+	remoteUpdate    *remoteUpdateDialog
+	desktopUpdater  *desktopUpdateService
+	terminalHistory *terminalHistory
 	files           *desktopFiles
 	filesWidthDirty bool
 	readReceipts    readReceiptState
@@ -122,6 +125,10 @@ type App struct {
 	// The command palette, settings and the tab being renamed.
 	paletteOpen           bool
 	paletteQuery          string
+	paletteSSHHosts       []string
+	paletteSSHLoading     bool
+	paletteSSHError       string
+	paletteSSHEpoch       uint64
 	settingsOpen          bool
 	settingsSection       int
 	settingsQuery         string
@@ -225,10 +232,14 @@ func (t *Tab) setFocus(p *Pane) {
 
 // newPane makes a pane with a new session in dir.
 func (a *App) newPane(dir string, cols, rows int) *Pane {
+	return a.newCommandPane(dir, nil, cols, rows)
+}
+
+func (a *App) newCommandPane(dir string, command []string, cols, rows int) *Pane {
 	if cols <= 0 {
 		cols, rows = 80, 24
 	}
-	info, err := a.client.Create(rex.CreateOptions{Dir: dir, Cols: cols, Rows: rows})
+	info, err := a.client.Create(rex.CreateOptions{Dir: dir, Command: command, Cols: cols, Rows: rows})
 	if err != nil {
 		log.Printf("creating a session: %v", err)
 		a.err = err.Error()
@@ -377,7 +388,11 @@ func (a *App) newTab(dir string) *Tab {
 }
 
 func (a *App) newLocalTab(dir string) *Tab {
-	p := a.newPane(dir, 0, 0)
+	return a.newLocalCommandTab(dir, nil)
+}
+
+func (a *App) newLocalCommandTab(dir string, command []string) *Tab {
+	p := a.newCommandPane(dir, command, 0, 0)
 	t := a.singlePaneTab(p)
 	at := min(a.active+1, len(a.tabs))
 	a.tabs = slices.Insert(a.tabs, at, t)

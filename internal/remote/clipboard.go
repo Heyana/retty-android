@@ -59,6 +59,10 @@ func (b *Bridge) serveConnection(conn net.Conn, socket string) {
 		b.serveFiles(conn, line)
 		return
 	}
+	if req.Op == "self-update" {
+		b.serveUpdate(conn, line)
+		return
+	}
 	conn.SetReadDeadline(time.Time{})
 	local, err := net.DialTimeout("unix", socket, 5*time.Second)
 	if err != nil {

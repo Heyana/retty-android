@@ -490,3 +490,33 @@ func TestAgentHookSurvivesWindowReconnect(t *testing.T) {
 		t.Fatal("completed event did not update reconnected pane")
 	}
 }
+
+func TestCodexTitleCompletionDoesNotNotify(t *testing.T) {
+	previous := prefs
+	prefs = settings{FontSize: defaultFontSize}
+	t.Cleanup(func() { prefs = previous })
+	a, tt := newTestApp(t)
+	p := a.tab().Focus
+	a.newTab("/tmp")
+	tt.Frame()
+	var notices []mygo.NotificationOptions
+	a.agentNotify = func(opts mygo.NotificationOptions, _ func()) func() {
+		notices = append(notices, opts)
+		return func() {}
+	}
+	info := withAgentState(p, "codex", agents.Running, 0)
+	a.apply(map[string]rex.SessionInfo{p.SID: info})
+	info.Agent.State, info.Agent.CompletionRevision = agents.Completed, 1
+	info.Agent.Summary = `{"title":"提交 relaykit-bridge PR"}`
+	a.apply(map[string]rex.SessionInfo{p.SID: info})
+	a.apply(map[string]rex.SessionInfo{p.SID: info})
+	if len(notices) != 0 {
+		t.Fatal("internal title generation sent a desktop notification", notices)
+	}
+	info.Agent.CompletionRevision++
+	info.Agent.Summary = "PR 已提交。"
+	a.apply(map[string]rex.SessionInfo{p.SID: info})
+	if len(notices) != 1 || notices[0].Body != info.Agent.Summary {
+		t.Fatal("real completion after title generation was lost", notices)
+	}
+}

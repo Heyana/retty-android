@@ -29,6 +29,7 @@ Usage:
   retty link [--data-dir PATH] [--link-file PATH]
   retty status [--data-dir PATH]
   retty stop [--data-dir PATH]
+  retty update [--data-dir PATH] [--check]
   retty version
 
 serve starts the encrypted gateway in the background and prints a retty:// link.
@@ -37,6 +38,8 @@ Use --foreground when running under systemd or another service supervisor.
 Paste it into Retty desktop's connection settings, or open it on your phone.
 Stopping the gateway preserves the background session server and its shells.
 link prints the saved connection link; status reads the gateway/session server.
+update installs the latest stable CLI and restores the gateway, preserving sessions.
+Use update --check to inspect the version without changing the installation.
 Data defaults to RETTY_DIR or the user config directory's RettyServer folder.
 The link is a full-access credential; connect.txt is saved with mode 0600.
 An interactive terminal also displays a QR code for phone scanning.
@@ -59,7 +62,7 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) erro
 		return err
 	}
 	command := args[0]
-	if command != "serve" && command != "start" && command != "link" && command != "status" && command != "stop" {
+	if command != "serve" && command != "start" && command != "link" && command != "status" && command != "stop" && command != "update" {
 		return fmt.Errorf("unknown command %q; run retty help", command)
 	}
 	flags := flag.NewFlagSet(command, flag.ContinueOnError)
@@ -68,10 +71,14 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) erro
 	var linkFile string
 	var foreground bool
 	var qr bool
+	var checkOnly bool
+	if command == "update" {
+		flags.BoolVar(&checkOnly, "check", false, "check for a newer stable CLI release without installing")
+	}
 	if command == "serve" || command == "start" {
 		flags.BoolVar(&foreground, "foreground", false, "run in the foreground (for systemd)")
 	}
-	if command != "status" && command != "stop" {
+	if command != "status" && command != "stop" && command != "update" {
 		flags.StringVar(&linkFile, "link-file", "", "connection link file (default: <data-dir>/connect.txt)")
 		flags.BoolVar(&qr, "qr", false, "display QR code even with redirected output")
 	}
@@ -95,6 +102,10 @@ func run(ctx context.Context, args []string, output, diagnostics io.Writer) erro
 		return err
 	}
 	switch command {
+	case "update":
+		updateCtx, cancel := context.WithTimeout(ctx, 12*time.Minute)
+		defer cancel()
+		return updateCommand(updateCtx, output, checkOnly)
 	case "stop":
 		return stopGateway(ctx, output)
 	case "link":
@@ -163,7 +174,7 @@ func localClient(ctx context.Context) (*rex.Client, error) {
 	})
 }
 
-func serve(ctx context.Context, output, diagnostics io.Writer, linkFile string, qr bool, ready func(string)) error {
+func serve(ctx context.Context, output, diagnostics io.Writer, linkFile string, qr bool, ready func(string), updates ...*gatewayUpdates) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
@@ -184,7 +195,11 @@ func serve(ctx context.Context, output, diagnostics io.Writer, linkFile string, 
 		return fmt.Errorf("incompatible session protocol %d; existing sessions were preserved", hello.Version)
 	}
 	startup, cancel := context.WithTimeout(ctx, 30*time.Second)
-	bridge, err := remote.Start(startup, rex.SocketPath(), remote.Options{StateDir: rex.Dir()})
+	options := remote.Options{StateDir: rex.Dir()}
+	if len(updates) != 0 {
+		options.OnUpdate = updates[0].request
+	}
+	bridge, err := remote.Start(startup, rex.SocketPath(), options)
 	cancel()
 	if err != nil {
 		return fmt.Errorf("start encrypted gateway: %w", err)

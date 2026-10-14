@@ -8,6 +8,7 @@ type sessionScreen interface {
 	Feed([]byte)
 	Resize(int, int)
 	Snapshot() []byte
+	SnapshotRecent(int) []byte
 	Title() string
 	Text() string
 	Close() error

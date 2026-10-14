@@ -7,6 +7,7 @@ import (
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 	"retty/internal/files"
 )
 
@@ -233,7 +234,7 @@ func (a *App) filePreviewView(c *ui.Context, k *colors, b *desktopFiles) {
 			}
 			ui.Text(c, filepath.Base(b.preview)).Label("预览文件名").Font("JetBrains Mono, monospace").FontSize(12).FontWeight(600).TextColor(k.text).SingleLine().Ellipsis("…").MinWidth(0).Shrink(1).Tooltip(b.preview)
 		})
-		if b.diff && len(b.previewRows) > 0 {
+		if b.previewDiff != nil {
 			ui.Row(c).Padding(3, 8).Gap(6).Radius(10).Background(k.hover).Shrink(0).Children(func() {
 				ui.Text(c, fmt.Sprintf("+%d", b.previewAdded)).Font("monospace").FontSize(11).FontWeight(600).TextColor(k.busy)
 				ui.Text(c, fmt.Sprintf("−%d", b.previewRemoved)).Font("monospace").FontSize(11).FontWeight(600).TextColor(ui.Hex("#d65d63"))
@@ -246,7 +247,7 @@ func (a *App) filePreviewView(c *ui.Context, k *colors, b *desktopFiles) {
 			button.Opacity(.3)
 		}
 		button.Menu(func(m *ui.Menu) {
-			if m.Item("复制预览内容").Disabled(b.previewLoading || len(b.previewRows) == 0).Chosen() {
+			if m.Item("复制预览内容").Disabled(b.previewLoading || len(b.previewData) == 0 || b.previewCode == nil && !b.diff).Chosen() {
 				c.Services().WriteClipboard(string(b.previewData))
 			}
 			if m.Item("复制路径").Chosen() {
@@ -285,45 +286,10 @@ func (a *App) filePreviewView(c *ui.Context, k *colors, b *desktopFiles) {
 	}
 	if b.previewImage != nil {
 		ui.Image(c, b.previewImage).Fit(ui.Contain).Grow(1).MinHeight(0).FillWidth().Label("图片预览")
-	} else {
-		ui.List(c.Key("file-preview-rows"), &b.previewList, len(b.previewRows), func(i int) {
-			r := b.previewRows[i]
-			bg := ui.Color{}
-			accent := ui.Color{}
-			fg := k.text
-			switch r.Kind {
-			case '+':
-				bg = ui.Hex("#22c55e").Alpha(.12)
-				accent = ui.Hex("#52b966")
-			case '-':
-				bg = ui.Hex("#ef4444").Alpha(.12)
-				accent = ui.Hex("#d65d63")
-			case '@':
-				bg = k.hover
-				fg = k.textFaint
-			}
-			ui.Row(c).FillWidth().MinHeight(24).Padding(2, 10).Gap(8).Background(bg).BorderWidth(0, 0, 0, 3).BorderColor(accent).AlignItems(ui.Start).Children(func() {
-				num := func(n int) string {
-					if n == 0 {
-						return ""
-					}
-					return fmt.Sprint(n)
-				}
-				if b.diff {
-					ui.Text(c, num(r.Old)).Width(36).Shrink(0).Font("monospace").FontSize(11).TextColor(k.textFaint).TextAlign(ui.End)
-				}
-				ui.Text(c, num(r.New)).Width(36).Shrink(0).Font("monospace").FontSize(11).TextColor(k.textFaint).TextAlign(ui.End)
-				text := fileDisplayLine(r.Text)
-				if text == "" {
-					text = " "
-				}
-				if i < len(b.previewSyntax) && len(b.previewSyntax[i]) > 0 {
-					ui.RichText(c, fileSyntaxSpans(b.previewSyntax[i], c.Theme().Dark, fg)...).Grow(1).MinWidth(0).Font("JetBrains Mono, monospace").FontSize(13).TextColor(fg).Selectable()
-				} else {
-					ui.Text(c, text).Grow(1).MinWidth(0).Font("JetBrains Mono, monospace").FontSize(13).TextColor(fg).Selectable()
-				}
-			})
-		}).Grow(1).MinHeight(0).FillWidth().Label("文件预览")
+	} else if b.previewDiff != nil {
+		editor.DiffView(c.Key("file-preview-diff"), b.previewDiff).Grow(1).MinHeight(0).FillWidth().Label("文件变更预览")
+	} else if b.previewCode != nil {
+		editor.View(c.Key("file-preview-code"), b.previewCode).Grow(1).MinHeight(0).FillWidth()
 	}
 	if b.previewTruncated && !b.diff {
 		label := "加载更多"
@@ -339,14 +305,6 @@ func (a *App) filePreviewView(c *ui.Context, k *colors, b *desktopFiles) {
 	}
 
 	a.fileDownloadView(c, b)
-}
-
-func fileDisplayLine(text string) string {
-	if len(text) > 16384 {
-		prefix, _ := filePreviewText([]byte(text[:16384]), true)
-		text = prefix + " …（超长行已截断）"
-	}
-	return strings.ReplaceAll(text, "\t", "    ")
 }
 
 func (a *App) fileDownloadView(c *ui.Context, b *desktopFiles) {

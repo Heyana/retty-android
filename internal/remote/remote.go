@@ -19,6 +19,7 @@ import (
 	"github.com/tailscale/tailcat"
 	"retty/internal/notification"
 	"retty/internal/rex"
+	"retty/internal/selfupdate"
 )
 
 const Port = 4242
@@ -69,12 +70,14 @@ type Bridge struct {
 	onNotice     func(rex.DesktopActivity, notification.Notice) (notification.Route, error)
 	onClose      func()
 	onImage      func(context.Context, string, []byte) error
+	onUpdate     func(context.Context, selfupdate.Request) (selfupdate.Status, error)
 	imageGate    chan struct{}
 	imageContext context.Context
 	imageCancel  context.CancelFunc
 	uploadDir    string
 	uploadGate   chan struct{}
 	filesGate    chan struct{}
+	updateGate   chan struct{}
 	identityLock *os.File
 }
 
@@ -96,6 +99,8 @@ type Options struct {
 	// OnPasteImage runs off the UI thread after a bounded authenticated upload.
 	// It must copy to the desktop clipboard before sending Ctrl+V to the session.
 	OnPasteImage func(context.Context, string, []byte) error
+	// OnUpdate accepts only official CLI updates. Nil on desktop/mobile bridges.
+	OnUpdate func(context.Context, selfupdate.Request) (selfupdate.Status, error)
 }
 
 func Start(ctx context.Context, socket string, options Options) (*Bridge, error) {
@@ -116,6 +121,7 @@ func Start(ctx context.Context, socket string, options Options) (*Bridge, error)
 		b.uploadDir = filepath.Join(stateDir, "uploads")
 	}
 	b.onDevice, b.onNotice, b.onPeer, b.onImage = options.OnDevice, options.OnNotice, options.OnPeer, options.OnPasteImage
+	b.onUpdate = options.OnUpdate
 	ln, err := b.server.Listen(ctx, "tcp", fmt.Sprintf(":%d", Port))
 	if err != nil {
 		b.imageCancel()

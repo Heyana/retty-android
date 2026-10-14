@@ -11,11 +11,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"unicode/utf8"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
+	"github.com/egoist/mygo/ui/editor"
 	"retty/internal/files"
 	"retty/internal/remote"
 	"retty/internal/rex"
@@ -39,8 +39,8 @@ type desktopFiles struct {
 	preview                                          string
 	previewData                                      []byte
 	previewEntry                                     *files.Entry
-	previewRows                                      []files.DiffRow
-	previewSyntax                                    [][]fileSyntaxToken
+	previewCode                                      *editor.State
+	previewDiff                                      *editor.DiffState
 	previewLanguage                                  string
 	previewAdded, previewRemoved                     int
 	previewImage                                     *ui.Bitmap
@@ -49,7 +49,6 @@ type desktopFiles struct {
 	previewLimit                                     int
 	previewCancel                                    context.CancelFunc
 	previewEpoch                                     uint64
-	previewList                                      ui.ListState
 	downloadCancel                                   context.CancelFunc
 	downloadEpoch                                    uint64
 	downloading                                      bool
@@ -144,8 +143,8 @@ func (a *App) loadFileDirectory(b *desktopFiles, path string) {
 	b.preview = ""
 	b.previewImage = nil
 	b.previewData = nil
-	b.previewRows = nil
-	b.previewSyntax, b.previewLanguage = nil, ""
+	b.previewCode, b.previewDiff = nil, nil
+	b.previewLanguage = ""
 	b.previewAdded, b.previewRemoved = 0, 0
 	b.filter = ""
 	b.dir, b.pathInput = path, path
@@ -211,10 +210,9 @@ func (a *App) previewFile(b *desktopFiles, path string, diff bool, limit int) {
 	b.previewNote = ""
 	b.previewImage = nil
 	b.previewData = nil
-	b.previewRows = nil
-	b.previewSyntax, b.previewLanguage = nil, ""
+	b.previewCode, b.previewDiff = nil, nil
+	b.previewLanguage = ""
 	b.previewAdded, b.previewRemoved = 0, 0
-	b.previewList = ui.ListState{}
 	b.previewEntry = nil
 	b.previewTruncated = false
 	ctx, cancel := context.WithCancel(context.Background())
@@ -228,21 +226,22 @@ func (a *App) previewFile(b *desktopFiles, path string, diff bool, limit int) {
 		}
 		r, err := fileRequest(ctx, client, files.Request{Kind: kind, Path: path, Length: limit})
 		var bitmap *ui.Bitmap
-		var rows []files.DiffRow
+		var code *editor.State
+		var changes *editor.DiffState
 		var note string
 		if err == nil {
 			if diff {
 				if len(r.Data) == 0 {
 					note = "此文件没有 Git 变更"
+				} else if parsed, parseErr := fileDiffPreview(path, string(r.Data)); parseErr != nil {
+					note = "无法解析 Git 变更：" + parseErr.Error()
+					if text, ok := filePreviewText(r.Data, false); ok {
+						code = fileCodePreview("preview.diff", text)
+					}
+				} else if parsed == nil {
+					note = "此文件包含二进制或文件属性变更，可复制变更内容查看"
 				} else {
-					for _, row := range files.PatchRows(string(r.Data)) {
-						if row.Kind != '@' || strings.HasPrefix(row.Text, "@@ ") {
-							rows = append(rows, row)
-						}
-					}
-					if len(rows) == 0 {
-						note = "此文件包含二进制或文件属性变更，可复制变更内容查看"
-					}
+					changes = parsed
 				}
 			}
 			if !diff {
@@ -261,29 +260,14 @@ func (a *App) previewFile(b *desktopFiles, path string, diff bool, limit int) {
 					note = "二进制文件，请下载查看"
 				} else {
 					text, _ := filePreviewText(r.Data, r.Truncated)
-					for i, line := range strings.SplitN(strings.TrimSuffix(text, "\n"), "\n", files.MaxPreviewRows+1) {
-						if i == files.MaxPreviewRows {
-							note = "文本较长，仅显示前 20000 行；可复制已加载内容或下载完整文件"
-							break
-						}
-						rows = append(rows, files.DiffRow{Text: line, New: i + 1})
-					}
+					code = fileCodePreview(path, text)
 				}
 			}
 		}
-		var syntax [][]fileSyntaxToken
-		var language string
+		language := filePreviewLanguage(path)
 		add, del := 0, 0
-		for _, row := range rows {
-			if row.Kind == '+' {
-				add++
-			}
-			if row.Kind == '-' {
-				del++
-			}
-		}
-		if err == nil && len(rows) > 0 {
-			syntax, language = fileSyntax(ctx, path, rows, diff)
+		if changes != nil {
+			add, del = changes.Stats()
 		}
 		a.post(func() {
 			if !a.filesCurrent(b) || b.previewEpoch != epoch {
@@ -295,8 +279,8 @@ func (a *App) previewFile(b *desktopFiles, path string, diff bool, limit int) {
 				return
 			}
 			b.previewData = r.Data
-			b.previewRows = rows
-			b.previewSyntax, b.previewLanguage = syntax, language
+			b.previewCode, b.previewDiff = code, changes
+			b.previewLanguage = language
 			b.previewAdded, b.previewRemoved = add, del
 			b.previewImage = bitmap
 			b.previewEntry = r.Entry
