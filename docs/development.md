@@ -169,7 +169,7 @@ GitHub Actions 的 **Build macOS DMG** 工作流在推送 `main` 或手动运行
 
 配置后，CI 导入临时 Keychain，用 Developer ID 为应用、内嵌代码和 DMG 签名，启用 hardened runtime 与时间戳，等待 Apple 公证通过并 staple 票据，再验证 Gatekeeper 和生成校验文件。公证失败会阻止产物上传及 Release 发布；部分配置缺失会报错，不退回 ad hoc。任务结束后删除临时凭据。iOS 的 Apple Development / Apple Distribution 证书不能替代 Developer ID Application。
 
-公证提交结果和 Apple 诊断日志保存在 Actions 的 `macOS-notarization` Artifact，保留 14 天；不包含 P12、P8 或私钥。构建总超时 45 分钟，单次 Apple 公证等待最多 20 分钟。只有 DMG 和应用的票据、Gatekeeper 检查全部通过后，工作流才输出 `notarized=true`，Release 发布步骤再次检查这一结果。已发布的未公证版本不会原地覆盖，补齐凭据后递增 `mygo.json.version` 再发布。
+公证提交结果和 Apple 诊断日志保存在 Actions 的 `macOS-notarization-attempt-<尝试序号>` Artifact，每次重跑分别保留 14 天；不包含 P12、P8 或私钥。CI 通过 `scripts/xcrun-ci.py` 为 stapler 的票据附加和验证加入有限重试：仅退出码 68 且明确报告网络超时、DNS / 连接失败或断网时重试，最多 5 次，间隔 2、4、8、16 秒；票据、TLS、签名和其他验证错误直接失败。其他 xcrun 命令直接交给系统工具。构建总超时 45 分钟，单次 Apple 公证等待最多 20 分钟。只有 DMG 和应用的票据、Gatekeeper 检查全部通过后，工作流才输出 `notarized=true`，Release 发布步骤再次检查这一结果。已发布的未公证版本不会原地覆盖，补齐凭据后递增 `mygo.json.version` 再发布。
 
 ### 下载后提示已损坏
 

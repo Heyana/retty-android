@@ -52,6 +52,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Retry transient Apple ticket network failures
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/retty-tools"
+          install -m 755 scripts/xcrun-ci.py "$RUNNER_TEMP/retty-tools/xcrun"
+          echo "$RUNNER_TEMP/retty-tools" >> "$GITHUB_PATH"
+
       - name: Prepare optional Developer ID signing
         id: signing
         shell: bash
@@ -107,8 +115,10 @@ jobs:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Test update release validation
-        run: go test ./tools/verifyupdates
+      - name: Test release validation and ticket retries
+        run: |
+          PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -s scripts -p test_xcrun_ci.py
+          go test ./tools/verifyupdates
 
       - name: Build notarized apps and signed updates
         shell: bash
@@ -175,7 +185,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: macOS-notarization
+          name: macOS-notarization-attempt-${{ github.run_attempt }}
           path: ${{ runner.temp }}/retty-build.log
           if-no-files-found: ignore
           retention-days: 14
