@@ -69,7 +69,8 @@ func exportIcons() error {
 	if err := writePNG("resources/icon.png", mac); err != nil {
 		return err
 	}
-	// Tahoe reads a full-bleed asset catalog; keep the inset ICNS for fallback.
+	// Tahoe uses an Icon Composer stack. Older macOS must never receive the
+	// unmasked full-bleed artwork as a classic asset-catalog app icon.
 	if runtime.GOOS == "darwin" {
 		return exportMacCatalog(ios)
 	}
@@ -82,50 +83,69 @@ func exportMacCatalog(src image.Image) error {
 		return err
 	}
 	defer os.RemoveAll(work)
-	catalog := filepath.Join(work, "Retty.xcassets")
-	set := filepath.Join(catalog, "RettyAppIcon.appiconset")
-	if err := os.MkdirAll(set, 0o755); err != nil {
+	icon := filepath.Join(work, "RettyAppIcon.icon")
+	if err := os.MkdirAll(filepath.Join(icon, "Assets"), 0o755); err != nil {
 		return err
 	}
-	info := map[string]any{"author": "xcode", "version": 1}
-	var images []map[string]string
-	for _, points := range []int{16, 32, 128, 256, 512} {
-		for _, scale := range []int{1, 2} {
-			name := fmt.Sprintf("icon_%dx%d", points, points)
-			if scale == 2 {
-				name += "@2x"
-			}
-			name += ".png"
-			px := points * scale
-			img := image.NewRGBA(image.Rect(0, 0, px, px))
-			xdraw.CatmullRom.Scale(img, img.Bounds(), src, src.Bounds(), draw.Src, nil)
-			if err := writePNG(filepath.Join(set, name), img); err != nil {
-				return err
-			}
-			images = append(images, map[string]string{"idiom": "mac", "size": fmt.Sprintf("%dx%d", points, points), "scale": fmt.Sprintf("%dx", scale), "filename": name})
-		}
+	if err := writePNG(filepath.Join(icon, "Assets", "Retty.png"), src); err != nil {
+		return err
 	}
-	for path, contents := range map[string]any{
-		filepath.Join(catalog, "Contents.json"): map[string]any{"info": info},
-		filepath.Join(set, "Contents.json"):     map[string]any{"info": info, "images": images},
-	} {
-		data, err := json.MarshalIndent(contents, "", "  ")
-		if err != nil {
-			return err
-		}
-		if err := os.WriteFile(path, append(data, '\n'), 0o644); err != nil {
-			return err
-		}
+	document := map[string]any{
+		"fill": map[string]any{"solid": "srgb:0.06275,0.16863,0.17647,1.00000"},
+		"groups": []any{map[string]any{
+			"blur-material": nil,
+			"layers": []any{map[string]any{
+				"image-name": "Retty.png", "name": "Retty", "glass": false,
+			}},
+			"shadow":       map[string]any{"kind": "neutral", "opacity": 0},
+			"specular":     false,
+			"translucency": map[string]any{"enabled": false, "value": 0},
+		}},
+		"supported-platforms": map[string]any{"squares": []string{"macOS"}},
+	}
+	data, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(icon, "icon.json"), append(data, '\n'), 0o644); err != nil {
+		return err
 	}
 	out := filepath.Join(work, "compiled")
 	if err := os.MkdirAll(out, 0o755); err != nil {
 		return err
 	}
-	cmd := exec.Command("xcrun", "actool", "--compile", out, "--platform", "macosx", "--minimum-deployment-target", "13.0", "--app-icon", "RettyAppIcon", "--output-partial-info-plist", filepath.Join(out, "partial.plist"), catalog)
+	cmd := exec.Command("xcrun", "actool", icon, "--compile", out, "--platform", "macosx", "--target-device", "mac", "--minimum-deployment-target", "13.0", "--app-icon", "RettyAppIcon", "--enable-icon-stack-fallback-generation=disabled", "--output-partial-info-plist", filepath.Join(out, "partial.plist"))
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("compile macOS icon catalog: %w\n%s", err, output)
 	}
-	data, err := os.ReadFile(filepath.Join(out, "Assets.car"))
+	// Some Xcode versions also emit classic fallback renditions. Validate the
+	// compiled catalog, since those take precedence over ICNS on older macOS.
+	metadata, err := exec.Command("xcrun", "assetutil", "--info", filepath.Join(out, "Assets.car")).Output()
+	if err != nil {
+		return fmt.Errorf("inspect macOS icon catalog: %w", err)
+	}
+	var renditions []struct {
+		AssetType string
+		Name      string
+		Opaque    *bool
+	}
+	if err := json.Unmarshal(metadata, &renditions); err != nil {
+		return err
+	}
+	hasStack := false
+	for _, r := range renditions {
+		if r.Name != "RettyAppIcon" {
+			continue
+		}
+		hasStack = hasStack || r.AssetType == "IconImageStack"
+		if r.AssetType == "Icon Image" && (r.Opaque == nil || *r.Opaque) {
+			return fmt.Errorf("macOS icon catalog contains an unmasked classic icon")
+		}
+	}
+	if !hasStack {
+		return fmt.Errorf("macOS icon catalog is missing the Tahoe icon stack")
+	}
+	data, err = os.ReadFile(filepath.Join(out, "Assets.car"))
 	if err != nil {
 		return err
 	}

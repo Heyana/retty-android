@@ -62,6 +62,52 @@ func TestMobileNewSessionTabCompletesCommand(t *testing.T) {
 	})
 }
 
+func TestMobilePasteKeepsKeyboardFocus(t *testing.T) {
+	registerFonts()
+	m := &mobileApp{client: &rex.Client{}}
+	term, err := terminal.New(terminal.Options{Conn: nopConn{}, Font: terminal.Font{Family: termFont.Family, Size: 13}, Theme: lightTerm, OnPaste: m.pasteClipboard, OnSubmit: m.dismissKeyboard})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.term = term
+	t.Cleanup(func() { term.Close() })
+	tt := ui.NewTester(m.view, 390, 620)
+	tt.Click("Terminal")
+	tt.SetClipboard("first line\nsecond line")
+	tt.Click("更多")
+	tt.Click("粘贴")
+	if !tt.Focused("Terminal") {
+		t.Fatal("accessory paste dismissed the keyboard")
+	}
+	tt.Command("paste")
+	if !tt.Focused("Terminal") {
+		t.Fatal("system paste dismissed the keyboard")
+	}
+	// Image transfer and its result banners must not replace the focused
+	// terminal while a paste completes on the main thread.
+	m.imagePasteBusy = true
+	tt.Frame()
+	if !tt.HasText("正在粘贴图片…") || !tt.Focused("Terminal") {
+		t.Fatal("image paste progress dismissed the keyboard")
+	}
+	m.imagePasteBusy = false
+	m.error = "图片粘贴连接中断，请确认桌面会话后再试"
+	tt.Frame()
+	if !tt.Focused("Terminal") {
+		t.Fatal("image paste error dismissed the keyboard")
+	}
+	m.error = ""
+	tt.Frame()
+	if !tt.Focused("Terminal") {
+		t.Fatal("clearing paste status dismissed the keyboard")
+	}
+	tt.Type("continue typing")
+	tt.Click("收起")
+	if tt.Focused("Terminal") {
+		t.Fatal("explicit dismissal kept the keyboard open")
+	}
+}
+
 func TestMobileModifierArmingLockingAndSessionIsolation(t *testing.T) {
 	registerFonts()
 	conn, peer := net.Pipe()

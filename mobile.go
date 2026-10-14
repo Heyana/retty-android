@@ -860,7 +860,9 @@ func (m *mobileApp) terminalView(c *ui.Context) {
 		ui.Text(c, "正在粘贴图片…").FontSize(13).Padding(6, 16).TextColor(c.Theme().TextMuted)
 	}
 	var element ui.Element
-	ui.Box(c).Grow(1).MinHeight(0).FillWidth().Padding(4).Background(c.Theme().Background).Children(func() {
+	// Paste progress/error banners change the preceding siblings. Keep this
+	// container stable so its focused terminal retains the software keyboard.
+	ui.Box(c).Key("mobile-terminal-viewport").Grow(1).MinHeight(0).FillWidth().Padding(4).Background(c.Theme().Background).Children(func() {
 		keyboard := ui.KeyboardText
 		if m.keyboardLatch.Active() != 0 {
 			keyboard = ui.KeyboardASCII

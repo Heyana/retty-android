@@ -130,7 +130,7 @@ Release 会同时发布通用 DMG、三个 `update-darwin-*.json`、对应 `.tar
 GOWORK=off go run ./tools/mkicon
 ```
 
-这会导出两份 1024 × 1024 资源：`resources/icon.png` 使用 macOS 原生图标网格的圆角轮廓和透明留白，供 ICNS 回退；`resources/ios/app-icon.png` 为不透明、铺满画布的 iOS 底图，圆角由系统处理。在 macOS 上运行时，还通过 Xcode 的 `actool` 编译 `resources/darwin/Assets.car`，`macos.infoPlist.CFBundleIconName` 选择其中的 `RettyAppIcon`，让 macOS 26 使用铺满图标的系统蒙版，避免给透明 ICNS 加白色外框。不要直接把桌面 ICNS 底图用于手机，否则 MyGo 的透明区域白色填充会产生白边。
+这会导出两份 1024 × 1024 资源：`resources/icon.png` 使用 macOS 原生图标网格的圆角轮廓和透明留白，供 ICNS 回退；`resources/ios/app-icon.png` 为不透明、铺满画布的 iOS 底图，圆角由系统处理。在 macOS 上运行时，还通过 Xcode 26 的 `actool` 将同一底图编译为 Icon Composer 图标堆栈，写入 `resources/darwin/Assets.car`；`macos.infoPlist.CFBundleIconName` 选择其中的 `RettyAppIcon`。macOS 26 使用堆栈的系统蒙版，旧系统使用已裁圆角并留白的兼容图像或 ICNS。生成器检查实际编译出的资源，拒绝缺少堆栈或包含不透明经典图标的 catalog；不要把铺满画布的方形底图放进普通 macOS `.appiconset`，否则 macOS 15 会优先显示它并覆盖 ICNS。不要直接把桌面 ICNS 底图用于手机，否则 MyGo 的透明区域白色填充会产生白边。
 
 `scripts/build-ios.sh` 在自己的临时配置中选择 iOS 图标，仍编译仓库的主包并使用固定 MyGo，结束时删除该临时配置，不修改桌面的 `mygo.json`。覆盖更新手机时，可用 `IOS_PROVISIONING_PROFILE` 指定既有 profile 的名称或 UUID，并用 `IOS_SIGNING_IDENTITY` 指定其已有证书；脚本仅为这次构建启用手动签名，不改变正常配置。手动签名也必须保留 `ios.entitlements` 中的既有 Keychain 访问组，安装前对比新旧应用实际签名的 entitlements。
 
