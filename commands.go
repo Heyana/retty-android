@@ -87,9 +87,25 @@ func (a *App) menu() *mygo.Menu {
 		{Label: "Cycle Tabs", Submenu: []*mygo.MenuItem{item(&cmdNextTab), item(&cmdPrevTab)}},
 		mygo.Separator(),
 	}
+	// Command-digit selects tabs only in sidebar mode, where the sidebar
+	// labels them; in tab mode Command-1 switches to the sidebar instead.
+	// Hidden menu items take no part in key equivalent matching, so only
+	// one of the two Command-1 items answers at a time.
+	sidebarMode := prefs.DesktopLayout == "sidebar"
+	a.showSidebarItem = &mygo.MenuItem{
+		Label: "Show Tab Sidebar", Accelerator: "CmdOrCtrl+1", Hidden: sidebarMode,
+		Click: func(*mygo.MenuItem, *mygo.Window) {
+			a.do(func() {
+				prefs.SidebarCollapsed = false
+				a.setDesktopLayout("sidebar")
+			})
+		},
+	}
+	tabItems = append(tabItems, a.showSidebarItem)
+	a.tabShortcutItems = a.tabShortcutItems[:0]
 	for i := 1; i <= 9; i++ {
-		tabItems = append(tabItems, &mygo.MenuItem{
-			Label: fmt.Sprintf("Show Tab %d", i), Accelerator: fmt.Sprintf("CmdOrCtrl+%d", i),
+		a.tabShortcutItems = append(a.tabShortcutItems, &mygo.MenuItem{
+			Label: fmt.Sprintf("Show Tab %d", i), Accelerator: fmt.Sprintf("CmdOrCtrl+%d", i), Hidden: !sidebarMode,
 			Click: func(*mygo.MenuItem, *mygo.Window) {
 				a.do(func() {
 					if i == 9 {
@@ -101,6 +117,7 @@ func (a *App) menu() *mygo.Menu {
 			},
 		})
 	}
+	tabItems = append(tabItems, a.tabShortcutItems...)
 	a.appearanceItems = make(map[string]*mygo.MenuItem)
 	appearance := func(label, v string) *mygo.MenuItem {
 		it := &mygo.MenuItem{Label: label, Type: mygo.MenuItemRadio, Checked: prefs.Appearance == v, Click: func(*mygo.MenuItem, *mygo.Window) {
@@ -220,6 +237,10 @@ func (a *App) closeFocused() {
 		a.terminalHistory.close()
 		return
 	}
+	if prefs.FilesOpen {
+		a.toggleFiles()
+		return
+	}
 	if t := a.tab(); t != nil && t.Focus != nil {
 		a.closePane(t.Focus)
 	}
@@ -232,6 +253,10 @@ func (a *App) closeActiveTab() {
 	}
 	if a.terminalHistory != nil && a.terminalHistory.open {
 		a.terminalHistory.close()
+		return
+	}
+	if prefs.FilesOpen {
+		a.toggleFiles()
 		return
 	}
 	if t := a.tab(); t != nil {

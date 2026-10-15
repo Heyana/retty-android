@@ -109,9 +109,13 @@ type App struct {
 	openLinkURL     func(string) error // injectable native URL opener
 	win             *mygo.Window
 	appearanceItems map[string]*mygo.MenuItem
-	client          *rex.Client
-	hello           rex.Hello
-	err             string
+	// showSidebarItem and tabShortcutItems share Command-digit shortcuts;
+	// syncLayoutMenu shows the set that belongs to the current layout.
+	showSidebarItem  *mygo.MenuItem
+	tabShortcutItems []*mygo.MenuItem
+	client           *rex.Client
+	hello            rex.Hello
+	err              string
 
 	tabs              []*Tab
 	active            int
@@ -268,6 +272,7 @@ func (a *App) attach(p *Pane, cols, rows int) {
 		Transparent:    true,
 		CopyRawText:    prefs.CopyRawText,
 		OnSplit:        onSplit,
+		OnOpenLink:     func(link terminal.Link) { a.openTerminalLink(p, link) },
 	}
 	if p.SID == "" {
 		term, err := terminal.New(options)
@@ -326,7 +331,6 @@ func (a *App) attach(p *Pane, cols, rows int) {
 		// Reuse the phone's retained-reader and atomic snapshot replacement.
 		options.Conn = p.remoteView
 	}
-	options.OnOpenLink = func(link terminal.Link) { a.openTerminalLink(p, link) }
 	options.OnRenderEvent = func(event terminal.RenderEvent) { logRenderEvent(p.SID, event) }
 	options.OnTitle = func(title string) {
 		update(func() { p.title = title })

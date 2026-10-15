@@ -16,6 +16,7 @@ func TestFileAndURLMatches(t *testing.T) {
 		{"see ~/work/中文.go#L8C2", "中文", Link{Path: "~/work/中文.go", Line: 8, Column: 2}},
 		{`File "/tmp/my project/中文.go":13:2`, "project", Link{Path: "/tmp/my project/中文.go", Line: 13, Column: 2}},
 		{"(../README.md),", "README", Link{Path: "../README.md"}},
+		{"• 详细规划已写入 docs/automation-plan.md (docs/automation-plan.md)。", "automation", Link{Path: "docs/automation-plan.md"}},
 		{"已保存新版图标 (assets/branding/retty-terminal-v3.png)，使用新版", "retty", Link{Path: "assets/branding/retty-terminal-v3.png"}},
 		{"retty-terminal-v3.prompt.txt)也已保存。", "retty", Link{Path: "retty-terminal-v3.prompt.txt"}},
 		{"已保存（assets/branding/中文.png），继续", "中文", Link{Path: "assets/branding/中文.png"}},

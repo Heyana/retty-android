@@ -68,9 +68,22 @@ func (a *App) setDesktopLayout(layout string) {
 	}
 	prefs.DesktopLayout = layout
 	a.sidebarVisibleTab = nil
+	a.syncLayoutMenu()
 	saveSettings()
 	if !a.settingsOpen {
 		a.focusCurrentTerminal()
+	}
+}
+
+// syncLayoutMenu gives Command-digit to tab selection in sidebar mode and
+// Command-1 to showing the sidebar in tab mode.
+func (a *App) syncLayoutMenu() {
+	sidebar := prefs.DesktopLayout == "sidebar"
+	if a.showSidebarItem != nil {
+		a.showSidebarItem.SetVisible(!sidebar)
+	}
+	for _, it := range a.tabShortcutItems {
+		it.SetVisible(sidebar)
 	}
 }
 

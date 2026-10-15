@@ -19,6 +19,7 @@ import (
 	"retty/internal/files"
 	"retty/internal/remote"
 	"retty/internal/rex"
+	"retty/internal/terminal"
 )
 
 type desktopFiles struct {
@@ -135,6 +136,52 @@ func (a *App) filesCurrent(b *desktopFiles) bool {
 	return t != nil && t.Focus == b.pane && b.host == b.pane.host && (b.pane.host == nil || b.pane.host.client == b.client && b.pane.host.connected())
 }
 
+func (a *App) openTerminalFile(p *Pane, link terminal.Link) {
+	if t := a.tab(); t == nil || t.Focus != p || p.closed {
+		return
+	}
+	prefs.FilesOpen = true
+	a.focusReq = nil
+	saveSettings()
+	a.syncFiles()
+	b := a.files
+	if b == nil || !a.filesCurrent(b) {
+		return
+	}
+	// File links show the file itself, even when the browser was showing Diff.
+	b.diff = false
+	a.loadFileDirectory(b, filepath.Dir(link.Path))
+	ctx, epoch, previewEpoch, client, win := b.treeContext, b.epoch, b.previewEpoch, b.client, a.win
+	go func() {
+		r, err := fileRequest(ctx, client, files.Request{Kind: "stat", Path: link.Path})
+		a.post(func() {
+			if !a.filesCurrent(b) || b.epoch != epoch || b.previewEpoch != previewEpoch {
+				return
+			}
+			if err != nil {
+				b.err = err.Error()
+				return
+			}
+			if r.Entry == nil || !r.Entry.Directory && !r.Entry.Regular {
+				b.err = "此路径不是普通文件或目录"
+				return
+			}
+			if r.Entry.Directory {
+				a.loadFileDirectory(b, r.Path)
+				return
+			}
+			limit := 256 << 10
+			if link.Line > 0 {
+				limit = files.MaxRead
+			}
+			a.previewFileAt(b, r.Path, false, limit, link.Line, link.Column)
+		})
+		if win != nil {
+			win.Invalidate()
+		}
+	}()
+}
+
 func (a *App) loadFileDirectory(b *desktopFiles, path string) {
 	b.stop()
 	b.loading = true
@@ -196,6 +243,10 @@ func (a *App) loadFileDirectory(b *desktopFiles, path string) {
 }
 
 func (a *App) previewFile(b *desktopFiles, path string, diff bool, limit int) {
+	a.previewFileAt(b, path, diff, limit, 0, 0)
+}
+
+func (a *App) previewFileAt(b *desktopFiles, path string, diff bool, limit, line, column int) {
 	if !a.filesCurrent(b) {
 		return
 	}
@@ -265,6 +316,9 @@ func (a *App) previewFile(b *desktopFiles, path string, diff bool, limit int) {
 			}
 		}
 		language := filePreviewLanguage(path)
+		if code != nil && line > 0 {
+			code.GoTo(editor.Pos{Line: line - 1, Col: max(0, column-1)})
+		}
 		add, del := 0, 0
 		if changes != nil {
 			add, del = changes.Stats()

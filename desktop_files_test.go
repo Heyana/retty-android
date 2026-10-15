@@ -20,6 +20,46 @@ import (
 	"retty/internal/rex"
 )
 
+func TestDesktopFilesCloseCommandsKeepTerminal(t *testing.T) {
+	for _, cmd := range []*command{&cmdClosePane, &cmdCloseTab} {
+		for _, layout := range []string{"", "sidebar"} {
+			t.Run(fmt.Sprintf("%s/layout=%s", cmd.Title, layout), func(t *testing.T) {
+				previous := prefs
+				prefs = settings{FontSize: defaultFontSize, DesktopLayout: layout}
+				t.Cleanup(func() { prefs = previous })
+				t.Setenv("RETTY_DIR", t.TempDir())
+				a, tt := newStaticTestApp(t)
+				original := a.tab()
+				p, root := original.Focus, original.Root
+				p.info.Dir = t.TempDir()
+				tt.Frame()
+				a.toggleFiles()
+				tt.Frame()
+				browser := a.files
+				t.Cleanup(browser.stop)
+				ctx, cancel := context.WithCancel(context.Background())
+				browser.previewCancel = cancel
+
+				// Native menu accelerators dispatch these commands outside the tester.
+				cmd.Run(a)
+				tt.Frame()
+				if prefs.FilesOpen || readSettings().FilesOpen || a.files != nil {
+					t.Fatal("close command did not dismiss the file browser")
+				}
+				if len(a.tabs) != 1 || a.tab() != original || original.Root != root || original.Focus != p || p.closed || p.term == nil {
+					t.Fatal("closing the file browser closed its terminal")
+				}
+				if !tt.Focused("Terminal") || !a.paneIsViewed(p) {
+					t.Fatal("closing the file browser did not restore terminal focus")
+				}
+				if ctx.Err() == nil {
+					t.Fatal("file preview request remained active")
+				}
+			})
+		}
+	}
+}
+
 func TestNewTabLeavesFileWorkspace(t *testing.T) {
 	for _, remote := range []bool{false, true} {
 		for _, layout := range []string{"", "sidebar"} {

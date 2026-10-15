@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"strings"
 
 	"github.com/egoist/mygo/ui"
@@ -89,9 +88,6 @@ func (a *App) compactTabLabel(c *ui.Context, k *colors, i int, t *Tab, name, det
 		ui.Box(c).Size(6, 6).Radius(3).Background(k.attention).Shrink(0)
 	} else if a.tabBusy(c, t) {
 		ui.Box(c).Size(6, 6).Radius(3).Background(k.busy).Shrink(0)
-	}
-	if shortcut := tabShortcut(i, len(a.tabs)); shortcut > 0 {
-		ui.Text(c, fmt.Sprintf("⌘%d", shortcut)).FontSize(10).TextColor(k.textFaint).Shrink(0)
 	}
 	if hovered && len(a.tabs) > 1 {
 		if iconButton(c, k, "x", "Close Tab", 16, 11).Shrink(0).Tooltip("Close Tab").Clicked() {

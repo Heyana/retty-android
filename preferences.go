@@ -199,10 +199,10 @@ func (a *App) preferenceItems() []preferenceItem {
 					a.setCopyRawText(selected == 1)
 				}
 			}},
-		{id: "link-editor", title: "打开文件的编辑器", label: "File link editor", detail: "⌘ 点击文件路径时使用的编辑器。自动优先选择 VS Code、Cursor；这两个编辑器支持行列号跳转。", group: "链接", section: 1,
+		{id: "link-editor", title: "打开文件的编辑器", label: "File link editor", detail: "⌘ 点击文件路径时默认在 Retty 文件查看器中打开，支持行列号跳转；也可选择外部编辑器。", group: "链接", section: 1,
 			modified: prefs.LinkEditor != "", reset: func() { a.setLinkEditor("") },
 			control: func(c *ui.Context) {
-				values, labels := []string{"", "vscode", "cursor", "system"}, []string{"自动", "VS Code", "Cursor", "系统默认"}
+				values, labels := []string{"", "vscode", "cursor", "system"}, []string{"Retty 文件查看器", "VS Code", "Cursor", "系统默认"}
 				selected := labels[0]
 				for i, value := range values {
 					if prefs.LinkEditor == value {
