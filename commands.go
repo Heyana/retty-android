@@ -80,44 +80,6 @@ func (a *App) menu() *mygo.Menu {
 			a.run(cmd)
 		}}
 	}
-	nextTab, prevTab := item(&cmdNextTab), item(&cmdPrevTab)
-	nextTab.Accelerator, prevTab.Accelerator = "CmdOrCtrl+Shift+]", "CmdOrCtrl+Shift+["
-	tabItems := []*mygo.MenuItem{
-		nextTab, prevTab,
-		{Label: "Cycle Tabs", Submenu: []*mygo.MenuItem{item(&cmdNextTab), item(&cmdPrevTab)}},
-		mygo.Separator(),
-	}
-	// Command-digit selects tabs only in sidebar mode, where the sidebar
-	// labels them; in tab mode Command-1 switches to the sidebar instead.
-	// Hidden menu items take no part in key equivalent matching, so only
-	// one of the two Command-1 items answers at a time.
-	sidebarMode := prefs.DesktopLayout == "sidebar"
-	a.showSidebarItem = &mygo.MenuItem{
-		Label: "Show Tab Sidebar", Accelerator: "CmdOrCtrl+1", Hidden: sidebarMode,
-		Click: func(*mygo.MenuItem, *mygo.Window) {
-			a.do(func() {
-				prefs.SidebarCollapsed = false
-				a.setDesktopLayout("sidebar")
-			})
-		},
-	}
-	tabItems = append(tabItems, a.showSidebarItem)
-	a.tabShortcutItems = a.tabShortcutItems[:0]
-	for i := 1; i <= 9; i++ {
-		a.tabShortcutItems = append(a.tabShortcutItems, &mygo.MenuItem{
-			Label: fmt.Sprintf("Show Tab %d", i), Accelerator: fmt.Sprintf("CmdOrCtrl+%d", i), Hidden: !sidebarMode,
-			Click: func(*mygo.MenuItem, *mygo.Window) {
-				a.do(func() {
-					if i == 9 {
-						a.selectTab(len(a.tabs) - 1)
-					} else {
-						a.selectTab(i - 1)
-					}
-				})
-			},
-		})
-	}
-	tabItems = append(tabItems, a.tabShortcutItems...)
 	a.appearanceItems = make(map[string]*mygo.MenuItem)
 	appearance := func(label, v string) *mygo.MenuItem {
 		it := &mygo.MenuItem{Label: label, Type: mygo.MenuItemRadio, Checked: prefs.Appearance == v, Click: func(*mygo.MenuItem, *mygo.Window) {
@@ -144,6 +106,12 @@ func (a *App) menu() *mygo.Menu {
 			mygo.Separator(),
 			item(&cmdSplitRight),
 			item(&cmdSplitDown),
+			mygo.Separator(),
+			// Control-Tab stays a menu accelerator so AppKit handles it
+			// before its own key-view navigation.
+			item(&cmdNextTab),
+			item(&cmdPrevTab),
+			item(&cmdRenameTab),
 			mygo.Separator(),
 			item(&cmdClosePane),
 			item(&cmdCloseTab),
@@ -189,7 +157,6 @@ func (a *App) menu() *mygo.Menu {
 			{Role: mygo.RoleToggleFullScreen},
 			{Role: mygo.RoleToggleDevTools, Label: "Inspector", Hidden: !mygo.IsDev()},
 		}},
-		{Label: "Tabs", Submenu: append(tabItems, mygo.Separator(), item(&cmdRenameTab))},
 		{Role: mygo.RoleWindowMenu},
 	})
 }
@@ -346,7 +313,8 @@ func (a *App) openPalette() {
 	a.loadPaletteSSH()
 }
 
-// shortcuts also handles tab navigation in views without a native menu.
+// shortcuts also handles tab navigation in views without a native menu,
+// and Command-1, which has no menu item.
 // Control-Tab is a menu accelerator so AppKit handles it before its own
 // key-view navigation. The original bracket shortcuts remain aliases.
 func (a *App) shortcuts(c *ui.Context) {
@@ -364,6 +332,16 @@ func (a *App) shortcuts(c *ui.Context) {
 	}
 	if !a.paletteOpen && prefs.DesktopLayout == "sidebar" && c.Shortcut(ui.Ctrl|ui.Cmd, ui.KeyS) {
 		a.toggleTabSidebar()
+		c.Invalidate()
+	}
+	// Command-1 switches between the tab bar and an expanded sidebar.
+	if !a.paletteOpen && c.Shortcut(ui.Cmd, ui.Key1) {
+		if prefs.DesktopLayout == "sidebar" {
+			a.setDesktopLayout("")
+		} else {
+			prefs.SidebarCollapsed = false
+			a.setDesktopLayout("sidebar")
+		}
 		c.Invalidate()
 	}
 	if c.Shortcut(ui.Cmd, ui.KeyF) {
@@ -472,7 +450,9 @@ func (a *App) palette(c *ui.Context, k *colors) {
 					ui.Text(c, a.paletteEmptyMessage()).FontSize(13).TextColor(k.textFaint).Padding(14)
 				}
 				for _, it := range items {
-					row := choices.Item(it.id).Key(it.id).Label(it.title).Height(34).Padding(0, 10).Gap(10).Radius(8).AlignItems(ui.Center).Cursor(ui.CursorPointer)
+					// No Key: an option takes its click as Item returns, so
+					// re-keying it afterwards would lose the click.
+					row := choices.Item(it.id).Label(it.title).Height(34).Padding(0, 10).Gap(10).Radius(8).AlignItems(ui.Center).Cursor(ui.CursorPointer)
 					if row.Highlighted() {
 						row.Background(k.panelSel)
 					} else if row.Hovered() {

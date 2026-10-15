@@ -140,3 +140,12 @@ Fork commit `c8fd199` merges upstream through v0.4.8 (`c0e1068`), including
 callback for application-owned remote history; Retty keeps its existing screen
 transport and local terminal extensions. The Ghostty manifest is unchanged,
 so the local CLI/iOS library packaging and snapshot/link fixes remain applicable.
+
+Fork commit `932609c` merges upstream through v0.5.1, and `0f6c018` keeps an
+inline combobox field from claiming its dialog's Escape. The framework terminal
+adds clipboard reads with allow/deny/ask (OSC 52), pasted images for programs
+that read the clipboard (OSC 5522, through `ghostty_terminal_paste`), `OnZoom`
+and Windows Terminal key bindings; its copy on select matches what Retty's
+vendor already does. These are new features rather than fixes to code Retty
+shares, so the vendor does not carry them yet. The Ghostty manifest is
+unchanged and Retty's local terminal additions remain applicable.

@@ -109,13 +109,9 @@ type App struct {
 	openLinkURL     func(string) error // injectable native URL opener
 	win             *mygo.Window
 	appearanceItems map[string]*mygo.MenuItem
-	// showSidebarItem and tabShortcutItems share Command-digit shortcuts;
-	// syncLayoutMenu shows the set that belongs to the current layout.
-	showSidebarItem  *mygo.MenuItem
-	tabShortcutItems []*mygo.MenuItem
-	client           *rex.Client
-	hello            rex.Hello
-	err              string
+	client          *rex.Client
+	hello           rex.Hello
+	err             string
 
 	tabs              []*Tab
 	active            int

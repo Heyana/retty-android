@@ -1,7 +1,6 @@
 package main
 
 import (
-	"fmt"
 	"slices"
 	"strings"
 	"time"
@@ -151,20 +150,6 @@ func (a *App) sidebarTab(c *ui.Context, k *colors, i int, t *Tab) {
 			if iconButton(c.Key("close-tab"), k, "x", "Close Tab", 18, 11).Shrink(0).Tooltip("Close Tab").Clicked() {
 				a.later(c, func() { a.closeTab(t) })
 			}
-		} else if shortcut := tabShortcut(i, len(a.tabs)); shortcut > 0 {
-			ui.Text(c, fmt.Sprintf("⌘%d", shortcut)).FontSize(10).TextColor(k.textFaint).Shrink(0)
 		}
 	})
-}
-
-// tabShortcut is the digit of Command that selects the tab at i, or 0 for
-// none: the first eight tabs have theirs, and Command-9 the last.
-func tabShortcut(i, count int) int {
-	if i == count-1 && i >= 8 {
-		return 9
-	}
-	if i < 8 {
-		return i + 1
-	}
-	return 0
 }

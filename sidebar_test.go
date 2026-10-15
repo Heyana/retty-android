@@ -215,3 +215,40 @@ func TestSidebarAppearanceAndRemoteMarker(t *testing.T) {
 	tt.Key(ui.Cmd, ui.KeyComma)
 	saveSettingsImage(t, tt, "sidebar-setting")
 }
+
+func TestCommandOneTogglesSidebar(t *testing.T) {
+	previous := prefs
+	prefs = settings{FontSize: defaultFontSize, SidebarCollapsed: true}
+	t.Cleanup(func() { prefs = previous })
+	a, tt := newTestApp(t)
+	a.newTab("/tmp")
+	a.newTab("/tmp")
+	tt.Frame()
+	if !tt.Focused("Terminal") {
+		t.Fatal("terminal is not focused")
+	}
+	tt.Key(ui.Cmd, ui.Key2)
+	if prefs.DesktopLayout != "" || a.active != 2 {
+		t.Fatal("Command-digit selected a tab in tab mode")
+	}
+	tt.Key(ui.Cmd, ui.Key1)
+	tt.Frame()
+	if prefs.DesktopLayout != "sidebar" || prefs.SidebarCollapsed || readSettings().DesktopLayout != "sidebar" || a.active != 2 {
+		t.Fatal("Command-1 did not switch to an expanded sidebar")
+	}
+	if _, ok := tt.Find("Tab sidebar"); !ok || !tt.Focused("Terminal") {
+		t.Fatal("sidebar did not show or the terminal lost focus")
+	}
+	tt.Key(ui.Cmd, ui.Key2)
+	if a.active != 2 {
+		t.Fatal("Command-digit selected a tab in sidebar mode")
+	}
+	tt.Key(ui.Cmd, ui.Key1)
+	tt.Frame()
+	if prefs.DesktopLayout != "" || readSettings().DesktopLayout != "" || a.active != 2 {
+		t.Fatal("Command-1 did not restore tab mode")
+	}
+	if _, ok := tt.Find("Tabs"); !ok || !tt.Focused("Terminal") {
+		t.Fatal("tab strip did not return or the terminal lost focus")
+	}
+}
