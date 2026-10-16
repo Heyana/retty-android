@@ -11,7 +11,6 @@ import (
 const (
 	compactTitleH = 32
 	compactGap    = 1.0 // visible separator; its pointer target is wider
-	compactHit    = 4
 	activeFor     = 1500 * time.Millisecond
 )
 
@@ -32,6 +31,7 @@ func (a *App) view(c *ui.Context) {
 			a.desktopContent(c, k)
 		}
 	})
+	a.saveFileWidth(c)
 	if a.err != "" {
 		a.errorBanner(c, k)
 	}
@@ -74,15 +74,15 @@ func (a *App) desktopContent(c *ui.Context, k *colors) {
 // iconButton is a borderless button of an icon, with a face on hover;
 // label names it for screen readers and its tooltip.
 func iconButton(c *ui.Context, k *colors, name, label string, size, iconSize float32) ui.Element {
-	b := ui.Box(c).Size(size, size).Center().Radius(size / 2.6).Cursor(ui.CursorPointer).Role(ui.RoleButton).Label(label)
+	b := ui.ButtonBase(c).Size(size, size).Center().Radius(size / 2.6).Cursor(ui.CursorPointer).Role(ui.RoleButton).Label(label)
 	if b.Pressed() {
 		b.Background(k.pressed)
-	} else if b.Hovered() {
+	} else if b.Hovered() || b.FocusVisible() {
 		b.Background(k.hover)
 	}
 	b.Transition(ui.ElementTransition{Colors: true, Duration: 120 * time.Millisecond})
 	col := k.iconMuted
-	if b.Hovered() {
+	if b.Hovered() || b.FocusVisible() {
 		col = k.text
 	}
 	b.Children(func() {
@@ -143,73 +143,21 @@ func (a *App) node(c *ui.Context, k *colors, t *Tab, n *Node) ui.Element {
 	if n.Pane != nil {
 		return a.paneCard(c, k, t, n.Pane)
 	}
-	var box ui.Element
-	if n.Vertical {
-		box = ui.Column(c.Key(n.ID))
-	} else {
-		box = ui.Row(c.Key(n.ID))
-	}
-	box.MinWidth(0).MinHeight(0).AlignItems(ui.Stretch)
-	bounds := box.Bounds()
-	// The tree may change as its panes build, as a split: build the
-	// children it has now.
-	first, second, ratio := n.A, n.B, n.Ratio
-	box.Children(func() {
-		a.node(c, k, t, first).Grow(ratio).Basis(0).MinWidth(0).MinHeight(0)
-		space := ui.Box(c.Key("divider-space")).Shrink(0)
-		if n.Vertical {
-			space.Height(compactGap)
-		} else {
-			space.Width(compactGap)
-		}
-		div := ui.Box(c.Key("divider")).Role(ui.RoleSplitter).Label("Divider")
-		// Only one point takes layout space. The absolute pointer
-		// target spans both panes and stays centered on that line.
-		offset := compactGap*(0.5-ratio) - compactHit/2
-		if n.Vertical {
-			div.Absolute().Height(compactHit).Left(0).Right(0).
-				TopPercent(100 * ratio).MarginY(offset).Cursor(ui.CursorResizeRow)
-		} else {
-			div.Absolute().Width(compactHit).Top(0).Bottom(0).
-				LeftPercent(100 * ratio).MarginX(offset).Cursor(ui.CursorResizeColumn)
-		}
-		if dx, dy, ok := div.Dragged(); ok {
-			total := bounds.W - compactGap
-			d := dx
-			if n.Vertical {
-				total, d = bounds.H-compactGap, dy
-			}
-			if total > 0 {
-				n.Ratio = min(max(n.Ratio+d/total, 0.08), 0.92)
-				a.changed()
-			}
-		}
-		if div.DoubleClicked() {
-			n.Ratio = 0.5
-			a.changed()
-		}
-		showGrip := div.Hovered() || div.Dragging() || div.Pressed()
-		width, height := c.Size()
-		div.Draw(func(p *ui.Painter, r ui.Rect) {
-			// Reach the center of adjoining gaps at nested split
-			// junctions, without drawing into the title bar.
-			if n.Vertical {
-				x0, x1 := max(0, r.X-compactGap/2), min(width, r.X+r.W+compactGap/2)
-				p.Fill(ui.Rect{X: x0, Y: r.Y + r.H/2 - 0.5, W: x1 - x0, H: 1}, k.headerBorder, 0)
-			} else {
-				y0, y1 := max(compactTitleH, r.Y-compactGap/2), min(height, r.Y+r.H+compactGap/2)
-				p.Fill(ui.Rect{X: r.X + r.W/2 - 0.5, Y: y0, W: 1, H: y1 - y0}, k.headerBorder, 0)
-			}
-			if showGrip {
-				if n.Vertical {
-					p.Fill(ui.Rect{X: r.X + r.W/2 - 18, Y: r.Y + r.H/2 - 1.5, W: 36, H: 3}, k.iconMuted.Alpha(0.6), 1.5)
-				} else {
-					p.Fill(ui.Rect{X: r.X + r.W/2 - 1.5, Y: r.Y + r.H/2 - 18, W: 3, H: 36}, k.iconMuted.Alpha(0.6), 1.5)
-				}
-			}
-		})
-		a.node(c, k, t, second).Grow(1 - ratio).Basis(0).MinWidth(0).MinHeight(0)
+	// A child can change the tree while it builds (for example, splitting).
+	first, second := n.A, n.B
+	percent := n.Ratio * 100
+	box := desktopSplit(c.Key(n.ID), k, &percent, n.Vertical, true, func() {
+		n.Ratio = 0.5
+		a.changed()
+	}, func() ui.Element {
+		return a.node(c, k, t, first)
+	}, func() {
+		a.node(c, k, t, second).Fill()
 	})
+	if box.Changed() {
+		n.Ratio = percent / 100
+		a.changed()
+	}
 	return box
 }
 
@@ -235,7 +183,9 @@ func (a *App) paneCard(c *ui.Context, k *colors, t *Tab, p *Pane) ui.Element {
 			if p.term == nil {
 				return
 			}
-			p.term.SetSelectOnDrag(paneProgram(p).Agent)
+			program := paneProgram(p)
+			p.term.SetSelectOnDrag(program.Agent || program.LocalSelection)
+			p.term.SetSelectOnDragInAltScreen(program.LocalSelection)
 			tv := terminal.View(c, p.term).Fill()
 			if p.acceptsFileDrop() {
 				if files := tv.DroppedFiles(); len(files) > 0 {

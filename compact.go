@@ -46,12 +46,12 @@ func (a *App) compactTitleBar(c *ui.Context, k *colors, bar ui.TitleBar) {
 }
 
 func compactTitleButton(c *ui.Context, k *colors, name, label string, highlighted bool) ui.Element {
-	b := ui.Box(c).Width(28).FillHeight().Shrink(0).
+	b := ui.ButtonBase(c).Width(28).FillHeight().Shrink(0).
 		Center().Role(ui.RoleButton).Label(label).Focusable().Cursor(ui.CursorPointer).
 		BorderWidth(0, 0, 1, 0).BorderColor(k.headerBorder)
 	if b.Pressed() {
 		b.Background(k.pressed)
-	} else if b.Hovered() {
+	} else if b.Hovered() || b.FocusVisible() {
 		b.Background(k.hover)
 	}
 	col := k.iconMuted

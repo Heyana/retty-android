@@ -113,6 +113,9 @@ func TestNewTabLeavesFileWorkspace(t *testing.T) {
 				if ctx.Err() == nil {
 					t.Fatal("file preview request remained active")
 				}
+				if remote {
+					waitFor(t, tt, "new tab input attachment", func() bool { return a.tab().Focus.remoteView.inputReady() })
+				}
 				tt.Type("printf 'new-tab-%s\\n' focused")
 				tt.Key(0, ui.KeyEnter)
 				waitFor(t, tt, "new tab input", func() bool { return strings.Contains(a.tab().Focus.term.Text(), "new-tab-focused") })
@@ -163,7 +166,7 @@ func TestDesktopFilesBrowsePreviewAndLayouts(t *testing.T) {
 		t.Fatal("workspace did not preserve the hidden terminal")
 	}
 	content, ok := tt.Find("文件内容区")
-	if !ok || content.W != 736 || content.Y != compactTitleH || content.H != 620-compactTitleH {
+	if !ok || content.W != 739 || content.Y != compactTitleH || content.H != 620-compactTitleH {
 		t.Fatal("content does not occupy remaining workspace", content)
 	}
 	if !tt.HasText("文件树") || !tt.HasText("浏览") || !tt.HasText("Diff") {
@@ -223,19 +226,32 @@ func TestDesktopFilesBrowsePreviewAndLayouts(t *testing.T) {
 		t.Fatal("directory dialog did not close")
 	}
 
-	divider, ok := tt.Find("调整文件树宽度")
+	divider, ok := tt.Find("Divider")
 	if !ok {
 		t.Fatal("missing divider")
 	}
-	x, y := divider.X+2, divider.Y+20
+	x, y := divider.X+divider.W/2, divider.Y+20
 	tt.Press(x, y)
 	tt.Move(x+40, y)
 	tt.Release(x+40, y)
 	tt.Frame()
+	tt.Advance(250 * time.Millisecond)
 	if prefs.FilesWidth != 300 || readSettings().FilesWidth != 300 {
 		t.Fatal("divider width did not persist", prefs.FilesWidth, readSettings().FilesWidth)
 	}
-	prefs.FilesWidth = 260
+	tt.Key(0, ui.KeyRight)
+	a.saveNow() // Closing the GUI must also flush a pending width save.
+	if prefs.FilesWidth != 310 || readSettings().FilesWidth != 310 {
+		t.Fatal("keyboard divider adjustment did not persist", prefs.FilesWidth, readSettings().FilesWidth)
+	}
+	divider, _ = tt.Find("Divider")
+	x, y = divider.X+divider.W/2, divider.Y+20
+	tt.Advance(time.Second)
+	tt.ClickAt(x, y)
+	tt.ClickAt(x, y)
+	if prefs.FilesWidth != 260 || readSettings().FilesWidth != 260 {
+		t.Fatal("double click did not restore the default width", prefs.FilesWidth, readSettings().FilesWidth)
+	}
 	tt.Frame()
 	if err := tt.Click("README.md"); err != nil {
 		t.Fatal(err)
@@ -312,9 +328,21 @@ func TestDesktopFilesBrowsePreviewAndLayouts(t *testing.T) {
 	prefs.DesktopLayout = "sidebar"
 	tt.Frame()
 	content, ok = tt.Find("文件内容区")
-	if !ok || content.W != 512 || content.X != 488 {
+	if !ok || content.W != 515 || content.X != 485 {
 		t.Fatal("sidebar and workspace overlap", content)
 	}
+	prefs.FilesWidth = 420
+	tt.SetSize(560, 620)
+	content, ok = tt.Find("文件内容区")
+	if !ok || content.W < 200 || content.X+content.W > 560 || prefs.FilesWidth != 420 {
+		t.Fatal("narrow sidebar workspace clipped the preview or lost the chosen width", content, prefs.FilesWidth)
+	}
+	tt.SetSize(1000, 620)
+	content, ok = tt.Find("文件内容区")
+	if !ok || content.X != 645 || prefs.FilesWidth != 420 {
+		t.Fatal("widening the window did not restore the chosen tree width", content, prefs.FilesWidth)
+	}
+	prefs.FilesWidth = 260
 	if err := tt.Click("收起文件浏览器"); err != nil {
 		t.Fatal(err)
 	}
@@ -435,9 +463,10 @@ func TestDesktopFileGitPreview(t *testing.T) {
 		t.Fatal(err)
 	}
 	waitFor(t, tt, "preview", func() bool { return a.files.preview != "" && !a.files.previewLoading })
-	if err := tt.Click("Diff"); err != nil {
+	if err := tt.Click("浏览"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Key(0, ui.KeyRight)
 	waitFor(t, tt, "git changes", func() bool { return a.files.diff && !a.files.loading })
 	if err := tt.Click("new.go"); err != nil {
 		t.Fatal(err)
@@ -456,9 +485,10 @@ func TestDesktopFileGitPreview(t *testing.T) {
 		png.Encode(f, tt.Image())
 		f.Close()
 	}
-	if err := tt.Click("浏览"); err != nil {
+	if err := tt.Click("Diff"); err != nil {
 		t.Fatal(err)
 	}
+	tt.Key(0, ui.KeyLeft)
 	waitFor(t, tt, "normal mode", func() bool { return !a.files.diff && !a.files.loading })
 	if readSettings().FilesDiff {
 		t.Fatal("mode was not persisted")

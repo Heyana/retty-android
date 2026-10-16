@@ -98,7 +98,7 @@ func TestDesktopRemoteSessionRoutingAndDetach(t *testing.T) {
 	if tab.Host != h || p.host != h || a.currentHost() != h || a.paneClient(p) != client {
 		t.Fatal("remote tab borrowed local transport")
 	}
-	tt.Frame()
+	waitFor(t, tt, "remote input attachment", func() bool { return p.remoteView.inputReady() })
 	tt.Type("export REMOTE_CONTINUE=kept; printf 'remote-%s\\n' ready")
 	tt.Key(0, ui.KeyEnter)
 	waitFor(t, tt, "remote input", func() bool { return strings.Contains(p.term.Text(), "remote-ready") })
@@ -152,7 +152,7 @@ func TestDesktopRemoteSessionRoutingAndDetach(t *testing.T) {
 	// Reattach shares the exact shell, including its environment.
 	a.openDesktopSession(h, p.info, true)
 	reopened := a.tab().Focus
-	tt.Frame()
+	waitFor(t, tt, "reattached remote input", func() bool { return reopened.remoteView.inputReady() })
 	tt.Type("printf 'continued-%s\\n' \"$REMOTE_CONTINUE\"")
 	tt.Key(0, ui.KeyEnter)
 	waitFor(t, tt, "same remote shell", func() bool { return strings.Contains(reopened.term.Text(), "continued-kept") })
@@ -296,9 +296,8 @@ func TestDesktopConnectionViews(t *testing.T) {
 	}
 	for _, dark := range []bool{false, true} {
 		tt.SetDark(dark)
-		// Headless frames use wall time; let the pane's 160 ms color transition finish.
-		time.Sleep(180 * time.Millisecond)
-		tt.Frame()
+		// Let the pane's 160 ms color transition finish on the test clock.
+		tt.Advance(180 * time.Millisecond)
 		if dark {
 			r, g, b, _ := tt.Image().At(100, 500).RGBA()
 			if max(r, g, b) > 50*257 {

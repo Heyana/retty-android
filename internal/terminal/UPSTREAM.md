@@ -46,11 +46,15 @@ edge, so a maximized window does not require the pointer to leave its grid.
 Ticks preserve the edge trigger and extend the selection across scrollback;
 moving back inside or releasing the pointer stops scrolling.
 
-Mouse-aware alternate-screen applications handle selection and their own
+By default, mouse-aware alternate-screen applications handle selection and their own
 history scrolling automatically, based on terminal modes rather than program
 identity. Their off-screen history is not in the terminal's scrollback.
 Primary-screen drags keep SelectOnDrag behavior; Shift always forces local
 terminal selection, and alternate screens without mouse tracking select locally.
+`SelectOnDragInAltScreen` explicitly extends `SelectOnDrag` to editors; Retty
+enables it for Vim/Neovim panes so dragging copies their visible text. Clicks,
+wheel input and Option drags still reach the editor. Other applications retain
+their existing selection ownership, including when the same pane changes programs.
 
 MyGo's checked-element migration (`ui.Element` values, build-scoped
 `Context`) is carried here as upstream did: the view keeps `ui.Services`
@@ -149,3 +153,16 @@ and Windows Terminal key bindings; its copy on select matches what Retty's
 vendor already does. These are new features rather than fixes to code Retty
 shares, so the vendor does not carry them yet. The Ghostty manifest is
 unchanged and Retty's local terminal additions remain applicable.
+
+Fork commit `f45d9d0569e2` merges upstream through v0.5.5. Retty carries
+the fix that automatically copies Select All through the same visible/raw
+selection formatter as pointer selections, while keeping its reflowed display
+and existing automatic-copy behavior. The upstream clipboard-format paste
+changes depend on the newer clipboard protocols that Retty's vendor does not
+yet expose; its download helper is internal to MyGo. The Ghostty manifest is
+unchanged, so Retty keeps its independent CLI/iOS packaging and library pin.
+
+Fork commit `9d63caa85ca9` adds the opt-in alternate-screen drag override above,
+with a real Vim mouse-mode regression and protocol checks for clicks, wheel,
+Option drags and switching back to application-owned selection. Retty carries
+the same terminal option and enables it for Vim/Neovim, including vi/view aliases.

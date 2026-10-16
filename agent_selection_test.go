@@ -47,17 +47,48 @@ func TestAgentPaneSelectionOwnershipAndListMarkers(t *testing.T) {
 			t.Fatal("keyboard copy lost the Agent's selected marker")
 		}
 	}
-	// Editors keep their existing mouse protocol instead of acquiring the
-	// Agent-specific drag override.
-	p.info.Program = "vim"
-	p.term.Feed([]byte("\x1b[?1049h"))
-	tt.Frame()
-	r, _ := tt.Find("Terminal")
-	tt.SetClipboard("keep")
-	tt.Press(r.X+15, r.Y+10)
-	tt.Move(r.X+80, r.Y+10)
-	tt.Release(r.X+80, r.Y+10)
-	if tt.Clipboard() != "keep" {
-		t.Fatal("editor mouse drag was intercepted as text selection")
+}
+
+func TestEditorPaneDragSelectionAndProgramChanges(t *testing.T) {
+	previous := prefs
+	prefs = settings{FontSize: defaultFontSize}
+	t.Cleanup(func() { prefs = previous })
+	for _, editor := range []string{"vim", "nvim", "vi", "view"} {
+		t.Run(editor, func(t *testing.T) {
+			a, tt := newStaticTestApp(t)
+			p := a.tab().Focus
+			p.info.Program, p.info.Idle, p.info.Args = editor, false, nil
+			p.term.Feed([]byte("\x1b[?1049h\x1b[?1002h\x1b[?1006h\x1b[H\x1b[2Jhello editor"))
+			tt.Frame()
+			r, ok := tt.Find("Terminal")
+			if !ok {
+				t.Fatal("missing terminal")
+			}
+			cols, rows := p.term.Size()
+			cw, ch := r.W/float32(cols), r.H/float32(rows)
+			y, left, right := r.Y+ch/2, r.X+cw/4, r.X+4.75*cw
+			tt.SetClipboard("previous")
+			tt.Press(left, y)
+			tt.Move(right, y)
+			tt.Release(right, y)
+			if got := tt.Clipboard(); got != "hello" {
+				t.Fatalf("%s drag copied %q", editor, got)
+			}
+			tt.SetClipboard("previous")
+			tt.Key(ui.Cmd, ui.KeyC)
+			if tt.Clipboard() != "hello" {
+				t.Fatalf("%s keyboard copy lost selection", editor)
+			}
+			// The same pane can switch to an Agent that selects its own history.
+			p.info.Program = "codex"
+			tt.Frame()
+			tt.SetClipboard("keep")
+			tt.Press(left, y)
+			tt.Move(right, y)
+			tt.Release(right, y)
+			if tt.Clipboard() != "keep" {
+				t.Fatal("editor override remained active after foreground program changed")
+			}
+		})
 	}
 }

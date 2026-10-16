@@ -198,8 +198,7 @@ func TestSidebarAppearanceAndRemoteMarker(t *testing.T) {
 	p.term.SetTheme(lightTerm, darkTerm)
 	for _, dark := range []bool{false, true} {
 		tt.SetDark(dark)
-		time.Sleep(180 * time.Millisecond) // capture after the chrome's color transition
-		tt.Frame()
+		tt.Advance(180 * time.Millisecond) // capture after the chrome's color transition
 		if !tt.HasText("Mac mini") {
 			t.Fatal("sidebar lost the remote host marker")
 		}

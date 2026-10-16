@@ -48,6 +48,11 @@ func TestCopyModesUseSameSelection(t *testing.T) {
 		if got := tt.Clipboard(); got != want {
 			t.Fatalf("menu copy (raw=%v) = %q", raw, got)
 		}
+		tt.SetClipboard("previous")
+		tt.Command("selectAll")
+		if got := tt.Clipboard(); got != want {
+			t.Fatalf("select all copy (raw=%v) = %q, want %q", raw, got, want)
+		}
 	}
 	// A selection containing only concealed characters leaves the clipboard.
 	term.SetCopyRawText(false)

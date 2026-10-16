@@ -48,8 +48,7 @@ func TestCodexInputPanelFollowsAppearance(t *testing.T) {
 			tt.Frame()
 			// Capture the settled chrome rather than the transition between
 			// themes; terminal cell colors update on the first frame.
-			time.Sleep(180 * time.Millisecond)
-			tt.Frame()
+			tt.Advance(180 * time.Millisecond)
 			r, ok := tt.Find("Terminal")
 			if !ok {
 				t.Fatal("missing terminal")

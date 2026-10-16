@@ -96,22 +96,22 @@ type Pane struct {
 
 // App is the state of Retty's window.
 type App struct {
-	remoteUpdate    *remoteUpdateDialog
-	desktopUpdater  *desktopUpdateService
-	terminalHistory *terminalHistory
-	files           *desktopFiles
-	filesWidthDirty bool
-	readReceipts    readReceiptState
-	pollSnapshots   map[*desktopHost]map[string]rex.SessionInfo
-	desktops        desktopConnections
-	desktopStorage  chan func()
-	phone           *phonePair
-	openLinkURL     func(string) error // injectable native URL opener
-	win             *mygo.Window
-	appearanceItems map[string]*mygo.MenuItem
-	client          *rex.Client
-	hello           rex.Hello
-	err             string
+	remoteUpdate     *remoteUpdateDialog
+	desktopUpdater   *desktopUpdateService
+	terminalHistory  *terminalHistory
+	files            *desktopFiles
+	filesWidthSaveAt time.Time
+	readReceipts     readReceiptState
+	pollSnapshots    map[*desktopHost]map[string]rex.SessionInfo
+	desktops         desktopConnections
+	desktopStorage   chan func()
+	phone            *phonePair
+	openLinkURL      func(string) error // injectable native URL opener
+	win              *mygo.Window
+	appearanceItems  map[string]*mygo.MenuItem
+	client           *rex.Client
+	hello            rex.Hello
+	err              string
 
 	tabs              []*Tab
 	active            int

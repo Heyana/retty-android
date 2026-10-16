@@ -246,8 +246,13 @@ func TestRemotePaneLoadingBannerDelay(t *testing.T) {
 	if slices.Contains(tt.Texts(), "正在载入会话…") {
 		t.Fatal("fast attachment flashes loading")
 	}
-	p.remoteLoadingSince = time.Now().Add(-remoteLoadingDelay - time.Millisecond)
+	p.remoteLoadingSince = tt.Now()
 	tt.Frame()
+	tt.Advance(remoteLoadingDelay - time.Millisecond)
+	if slices.Contains(tt.Texts(), "正在载入会话…") {
+		t.Fatal("loading feedback appeared before its delay")
+	}
+	tt.Advance(time.Millisecond)
 	if !slices.Contains(tt.Texts(), "正在载入会话…") {
 		t.Fatal("slow attachment has no feedback")
 	}

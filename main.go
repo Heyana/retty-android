@@ -230,6 +230,10 @@ func serverVersionError(version int) string {
 
 // saveNow sends the layout to the server and waits for it to be kept.
 func (a *App) saveNow() {
+	if !a.filesWidthSaveAt.IsZero() {
+		a.filesWidthSaveAt = time.Time{}
+		saveSettings()
+	}
 	if a.client == nil || len(a.tabs) == 0 && !a.quitting {
 		return
 	}

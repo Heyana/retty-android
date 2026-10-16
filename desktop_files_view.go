@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/egoist/mygo"
 	"github.com/egoist/mygo/ui"
@@ -23,22 +24,51 @@ func (a *App) filesToggle(c *ui.Context, k *colors) {
 }
 
 func (a *App) filesPanel(c *ui.Context, k *colors) {
-	width, _ := c.Size()
-	available := width
+	if prefs.FilesWidth < 200 || prefs.FilesWidth > 420 {
+		prefs.FilesWidth = 260
+	}
+	// Split preserves the requested width, but its generic 40pt minimum is
+	// too small for the preview toolbar. Keep room for it without replacing
+	// the user's chosen width when the window or tab sidebar shrinks it.
+	available, _ := c.Size()
 	if prefs.DesktopLayout == "sidebar" && !prefs.SidebarCollapsed {
-		if width < 720 {
+		if available < 720 {
 			available -= 188
 		} else {
 			available -= 224
 		}
 	}
-	w := prefs.FilesWidth
-	if w < 200 || w > 420 {
-		w = 260
+	shown := min(prefs.FilesWidth, max(160, available-240))
+	split := desktopSplit(c.Key("files-split"), k, &shown, false, false, func() {
+		prefs.FilesWidth = 260
+		saveSettings()
+	}, func() ui.Element {
+		return a.fileTreePanel(c, k)
+	}, func() {
+		a.fileContentPanel(c, k)
+	}).Fill()
+	if split.Changed() {
+		prefs.FilesWidth = min(max(shown, 200), 420)
+		a.filesWidthSaveAt = c.Now().Add(250 * time.Millisecond)
 	}
-	w = min(w, max(160, available-240))
+}
+
+// Coalesce continuous pointer and keyboard resizing into one settings write.
+func (a *App) saveFileWidth(c *ui.Context) {
+	if a.filesWidthSaveAt.IsZero() {
+		return
+	}
+	if wait := a.filesWidthSaveAt.Sub(c.Now()); wait > 0 && prefs.FilesOpen {
+		c.After(wait)
+		return
+	}
+	a.filesWidthSaveAt = time.Time{}
+	saveSettings()
+}
+
+func (a *App) fileTreePanel(c *ui.Context, k *colors) ui.Element {
 	b := a.files
-	ui.Column(c.Key("files-tree-panel")).Width(w).Shrink(0).FillHeight().MinHeight(0).Background(k.track).Children(func() {
+	return ui.Column(c.Key("files-tree-panel")).Fill().MinHeight(0).Background(k.track).Children(func() {
 		ui.Row(c).Height(50).Padding(0, 16).Gap(7).AlignItems(ui.Center).Children(func() {
 			ui.Icon(c, icon("folder-open")).Size(15, 15).TextColor(k.iconMuted)
 			ui.Text(c, "文件").FontSize(12).FontWeight(600).TextColor(k.textMuted)
@@ -87,20 +117,10 @@ func (a *App) filesPanel(c *ui.Context, k *colors) {
 		}
 		ui.Row(c).Height(30).Padding(0, 14).AlignItems(ui.Center).BorderWidth(1, 0, 0, 0).BorderColor(k.headerBorder).Children(func() { ui.Text(c, label).FontSize(10).TextColor(k.textFaint) })
 	})
-	divider := ui.Box(c.Key("files-divider")).Width(4).FillHeight().Shrink(0).Cursor(ui.CursorResizeColumn).Role(ui.RoleSplitter).Label("调整文件树宽度").BorderWidth(0, 1, 0, 0).BorderColor(k.headerBorder)
-	if dx, _, ok := divider.Dragged(); ok && dx != 0 {
-		prefs.FilesWidth = min(max(w+dx, 200), 420)
-		a.filesWidthDirty = true
-		c.Invalidate()
-	}
-	if divider.DoubleClicked() {
-		prefs.FilesWidth = 260
-		saveSettings()
-	}
-	if !divider.Pressed() && a.filesWidthDirty {
-		a.filesWidthDirty = false
-		saveSettings()
-	}
+}
+
+func (a *App) fileContentPanel(c *ui.Context, k *colors) {
+	b := a.files
 	canvas := k.panel
 	if !c.Theme().Dark {
 		canvas = ui.Hex("#f6f7f9")
@@ -124,33 +144,7 @@ func (a *App) filesPanel(c *ui.Context, k *colors) {
 					}
 				}
 			})
-			ui.Row(c).Padding(3).Gap(2).Radius(7).Background(k.hover).Shrink(0).Children(func() {
-				for _, mode := range []struct {
-					label string
-					diff  bool
-				}{{"浏览", false}, {"Diff", true}} {
-					selected := b != nil && b.diff == mode.diff
-					button := ui.ButtonBase(c.Key(mode.label)).Label(mode.label).Role(ui.RoleTab).Selected(selected).Height(25).MinWidth(43).Padding(0, 10).Radius(5).Focusable().Center().Cursor(ui.CursorPointer).Disabled(b == nil)
-					if selected {
-						button.Background(k.panel)
-					} else if button.Hovered() {
-						button.Background(k.pressed)
-					}
-					button.Children(func() {
-						color := k.textMuted
-						weight := 400
-						if selected {
-							color = k.text
-							weight = 600
-						}
-						ui.Text(c, mode.label).FontSize(11).FontWeight(weight).TextColor(color)
-					})
-					if button.Clicked() {
-						diff := mode.diff
-						a.later(c, func() { a.setFileMode(b, diff) })
-					}
-				}
-			})
+			a.fileModeControl(c, k, b)
 			iconButton(c, k, "ellipsis", "文件选项", 26, 15).Focusable().Disabled(b == nil).Menu(func(m *ui.Menu) {
 				if b == nil {
 					return
@@ -206,6 +200,30 @@ func (a *App) filesPanel(c *ui.Context, k *colors) {
 		}
 		ui.Column(c.Key("file-preview-card")).Label("文件内容卡片").Grow(1).MinHeight(0).AlignSelf(ui.Stretch).Margin(14).Radius(10).Border(1, k.panelBorder).Background(k.panel).Clip().Children(func() { a.filePreviewView(c, k, b) })
 	})
+}
+
+func (a *App) fileModeControl(c *ui.Context, k *colors, b *desktopFiles) {
+	selected := 0
+	if b != nil && b.diff {
+		selected = 1
+	}
+	control := ui.SegmentedBase(c.Key("file-mode"), &selected, 2)
+	control.Track.Label("文件浏览模式").Padding(3).Gap(2).Radius(7).Background(k.hover).Disabled(b == nil).Children(func() {
+		for i, label := range []string{"浏览", "Diff"} {
+			button := control.Segment(i).Label(label).Height(25).MinWidth(43).Padding(0, 10).Radius(5).Cursor(ui.CursorPointer)
+			color, weight := k.textMuted, 400
+			if i == selected {
+				button.Background(k.panel)
+				color, weight = k.text, 600
+			} else if button.Hovered() {
+				button.Background(k.pressed)
+			}
+			button.Children(func() { ui.Text(c, label).FontSize(11).FontWeight(weight).TextColor(color) })
+		}
+	})
+	if control.Track.Changed() && b != nil {
+		a.later(c, func() { a.setFileMode(b, selected == 1) })
+	}
 }
 
 func (a *App) setFileMode(b *desktopFiles, diff bool) {

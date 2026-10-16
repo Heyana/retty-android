@@ -52,14 +52,33 @@ func startPTY(path string, argv []string, dir string, env []string, cols, rows i
 
 func setSize(f *os.File, cols, rows int) error {
 	ws := &unix.Winsize{Col: uint16(clamp(cols)), Row: uint16(clamp(rows))}
-	return unix.IoctlSetWinsize(int(f.Fd()), unix.TIOCSWINSZ, ws)
+	return controlPTY(f, func(fd int) error { return unix.IoctlSetWinsize(fd, unix.TIOCSWINSZ, ws) })
+}
+
+// controlPTY holds a reference to the descriptor while an ioctl runs, so a
+// concurrent close cannot destroy or reuse it underneath the operation.
+func controlPTY(f *os.File, ioctl func(int) error) error {
+	conn, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var ioctlErr error
+	if err := conn.Control(func(fd uintptr) { ioctlErr = ioctl(int(fd)) }); err != nil {
+		return err
+	}
+	return ioctlErr
 }
 
 func clamp(v int) int { return max(1, min(v, 0xFFFF)) }
 
 // foreground returns the process group in the foreground of the terminal.
 func (p *pty) foreground() int {
-	pg, err := unix.IoctlGetInt(int(p.master.Fd()), unix.TIOCGPGRP)
+	var pg int
+	err := controlPTY(p.master, func(fd int) error {
+		var err error
+		pg, err = unix.IoctlGetInt(fd, unix.TIOCGPGRP)
+		return err
+	})
 	if err != nil {
 		return 0
 	}

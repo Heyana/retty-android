@@ -73,6 +73,8 @@ type program struct {
 	IconColor ui.Color
 	Shell     bool
 	Agent     bool
+	// LocalSelection prefers terminal copying in the editor's alternate screen.
+	LocalSelection bool
 }
 
 func programIconColor(c *ui.Context, p program) ui.Color {
@@ -108,8 +110,8 @@ var (
 		"lazygit":   {Name: "Git Changes", Glyph: "plus-minus-circle", IconColor: ui.Hex("#ffffff")},
 		"tig":       {Name: "Git Log", Glyph: "git-branch", IconColor: ui.Hex("#ffffff")},
 		"git":       {Name: "Git", Glyph: "brand:git", IconColor: ui.Hex("#ffffff")},
-		"vim":       {Name: "Vim", Glyph: "brand:vim", IconColor: ui.Hex("#ffffff")},
-		"nvim":      {Name: "Neovim", Glyph: "brand:neovim", IconColor: ui.Hex("#ffffff")},
+		"vim":       {Name: "Vim", Glyph: "brand:vim", IconColor: ui.Hex("#ffffff"), LocalSelection: true},
+		"nvim":      {Name: "Neovim", Glyph: "brand:neovim", IconColor: ui.Hex("#ffffff"), LocalSelection: true},
 		"hx":        {Name: "Helix", Glyph: "brand:helix", IconColor: ui.Hex("#c7a3f5")},
 		"emacs":     {Name: "Emacs", Glyph: "brand:gnuemacs", IconColor: ui.Hex("#ffffff")},
 		"htop":      {Name: "Activity", Glyph: "activity", IconColor: ui.Hex("#a7f3c4")},
