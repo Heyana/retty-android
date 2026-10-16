@@ -28,7 +28,7 @@ func (a *App) sidebarLayout(c *ui.Context, k *colors, bar ui.TitleBar) {
 				}
 				ui.Row(c).Height(compactTitleH).FillWidth().Padding(0, 8, 0, left).AlignItems(ui.Center).DragWindow().Children(func() {
 					ui.Spacer(c)
-					a.sidebarToggle(c, k)
+					a.collapseSidebarButton(c, k)
 				})
 				ui.Scroll(c.Key("sidebar-tabs")).Label("Sidebar tabs").Role(ui.RoleTabList).
 					Grow(1).MinHeight(0).FillWidth().Padding(10, 8).Gap(4).Children(func() {
@@ -46,14 +46,28 @@ func (a *App) sidebarLayout(c *ui.Context, k *colors, bar ui.TitleBar) {
 	})
 }
 
-func (a *App) sidebarToggle(c *ui.Context, k *colors) {
-	label := "收起侧边栏"
-	if prefs.SidebarCollapsed {
-		label = "展开侧边栏"
-	}
-	if iconButton(c.Key("toggle-tab-sidebar"), k, "panel-left", label, 26, 15).
-		Focusable().Shrink(0).Tooltip(label + "  ⌃⌘S").Clicked() {
+// The sidebar opens from the tab bar and closes from itself, so only one
+// of the two buttons shows at a time; both use the sidebar symbol, as
+// macOS apps do.
+func (a *App) collapseSidebarButton(c *ui.Context, k *colors) {
+	if iconButton(c.Key("collapse-tab-sidebar"), k, "sidebar-left", "收起侧边栏", 26, 15).
+		Focusable().Shrink(0).Tooltip("收起侧边栏  ⌃⌘S").Clicked() {
 		a.toggleTabSidebar()
+		c.Invalidate()
+	}
+}
+
+// expandSidebarButton opens the sidebar from either tab bar: in tab mode
+// as Command-1 does, and in a collapsed sidebar as Control-Command-S does.
+// Only the tab strip's buttons draw its bottom line; the sidebar's title
+// bar has its own.
+func (a *App) expandSidebarButton(c *ui.Context, k *colors) {
+	b, shortcut := compactTitleButton(c.Key("expand-tab-sidebar"), k, "sidebar-left", "展开侧边栏", false), "⌘1"
+	if prefs.DesktopLayout == "sidebar" {
+		b, shortcut = b.BorderWidth(0), "⌃⌘S"
+	}
+	if b.Tooltip("展开侧边栏  " + shortcut).Clicked() {
+		a.showTabSidebar()
 		c.Invalidate()
 	}
 }
@@ -66,7 +80,7 @@ func (a *App) sidebarTitleBar(c *ui.Context, k *colors, bar ui.TitleBar) {
 	ui.Row(c).Height(compactTitleH).FillWidth().Padding(0, bar.Right, 0, left).Gap(6).
 		Background(k.track).BorderWidth(0, 0, 1, 0).BorderColor(k.headerBorder).AlignItems(ui.Center).DragWindow().Children(func() {
 		if prefs.SidebarCollapsed {
-			a.sidebarToggle(c, k)
+			a.expandSidebarButton(c, k)
 		}
 		ui.Row(c).Grow(1).MinWidth(0).Children(func() {
 			if t := a.tab(); t != nil {

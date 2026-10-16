@@ -339,8 +339,7 @@ func (a *App) shortcuts(c *ui.Context) {
 		if prefs.DesktopLayout == "sidebar" {
 			a.setDesktopLayout("")
 		} else {
-			prefs.SidebarCollapsed = false
-			a.setDesktopLayout("sidebar")
+			a.showTabSidebar()
 		}
 		c.Invalidate()
 	}

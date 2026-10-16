@@ -315,8 +315,12 @@ func (s *Server) restoreAgent(req Request) (RestoreResult, error) {
 		return result, nil
 	}
 	cmd, err := r.command()
+	var env []string
 	if err == nil {
-		ss, err = newSessionForServer(req.SID, CreateOptions{Command: cmd, Dir: r.Dir, Env: r.Env, Cols: req.Cols, Rows: req.Rows, resumed: true}, s.agentToken)
+		cmd[0], env, err = resumeExecutable(cmd[0])
+	}
+	if err == nil {
+		ss, err = newSessionForServer(req.SID, CreateOptions{Command: cmd, Dir: r.Dir, Env: append(env, r.Env...), Cols: req.Cols, Rows: req.Rows, resumed: true}, s.agentToken)
 	}
 	if err != nil {
 		r.Error = err.Error()

@@ -515,3 +515,31 @@ func TestAgentRecoveryPersistsRepeatedTurnRevision(t *testing.T) {
 		t.Fatal("later completion revision was only updated in memory", got)
 	}
 }
+
+// After a reboot the daemon's PATH comes from a non-interactive login shell
+// and lacks what ~/.zshrc adds, such as Claude Code's ~/.local/bin.
+func TestAgentRecoveryFindsCLIOnInteractivePath(t *testing.T) {
+	s := recoveryServer(t)
+	cli := fakeResumeCLI(t, "claude", false)
+	userPath := filepath.Dir(cli) + string(os.PathListSeparator) + "/usr/bin:/bin"
+	t.Setenv("PATH", "/usr/bin:/bin")
+	previous := interactivePath
+	interactivePath = func() string { return userPath }
+	t.Cleanup(func() { interactivePath = previous })
+	s.recovery["pane"] = agentResume{Agent: "claude", SessionID: "conversation", Dir: Dir()}
+	r, err := s.restoreAgent(Request{SID: "pane"})
+	if err != nil || r.Error != "" || r.Session == nil {
+		t.Fatal(r, err)
+	}
+	ss := s.sessions["pane"]
+	// Every pane's PATH starts with its private Codex launcher.
+	path := ""
+	for _, kv := range ss.p.cmd.Env {
+		if value, ok := strings.CutPrefix(kv, "PATH="); ok {
+			path = value
+		}
+	}
+	if ss.p.cmd.Path != cli || !strings.HasSuffix(path, string(os.PathListSeparator)+userPath) {
+		t.Fatal("resumed without the interactive PATH", ss.p.cmd.Path, path)
+	}
+}

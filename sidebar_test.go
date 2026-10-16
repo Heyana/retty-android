@@ -251,4 +251,30 @@ func TestCommandOneTogglesSidebar(t *testing.T) {
 	if _, ok := tt.Find("Tabs"); !ok || !tt.Focused("Terminal") {
 		t.Fatal("tab strip did not return or the terminal lost focus")
 	}
+	// The tab bar opens the sidebar and the sidebar closes itself; only
+	// one of the two buttons is shown at a time.
+	if _, ok := tt.Find("收起侧边栏"); ok {
+		t.Fatal("tab mode shows the collapse button")
+	}
+	if err := tt.Click("展开侧边栏"); err != nil {
+		t.Fatal(err)
+	}
+	if prefs.DesktopLayout != "sidebar" || prefs.SidebarCollapsed {
+		t.Fatal("tab bar button did not open the sidebar")
+	}
+	if _, ok := tt.Find("展开侧边栏"); ok {
+		t.Fatal("open sidebar still shows the expand button")
+	}
+	if r, ok := tt.Find("收起侧边栏"); !ok || r.X+r.W > 224 {
+		t.Fatalf("collapse button is not in the sidebar: %+v", r)
+	}
+	if err := tt.Click("收起侧边栏"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := tt.Find("收起侧边栏"); ok || !prefs.SidebarCollapsed {
+		t.Fatal("collapsed sidebar still shows the collapse button")
+	}
+	if err := tt.Click("展开侧边栏"); err != nil || prefs.SidebarCollapsed {
+		t.Fatal("collapsed sidebar could not be opened from the tab bar", err)
+	}
 }

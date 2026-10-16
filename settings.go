@@ -84,6 +84,12 @@ func (a *App) focusCurrentTerminal() {
 	}
 }
 
+// showTabSidebar switches to the sidebar layout with the sidebar open.
+func (a *App) showTabSidebar() {
+	prefs.SidebarCollapsed = false
+	a.setDesktopLayout("sidebar")
+}
+
 func (a *App) toggleTabSidebar() {
 	if prefs.DesktopLayout != "sidebar" {
 		return

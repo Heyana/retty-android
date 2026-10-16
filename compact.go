@@ -32,6 +32,7 @@ func (a *App) compactTitleBar(c *ui.Context, k *colors, bar ui.TitleBar) {
 	}
 	ui.Row(c).Height(compactTitleH).Padding(0, bar.Right, 0, left).Gap(0).
 		Background(k.track).AlignItems(ui.Center).DragWindow().Children(func() {
+		a.expandSidebarButton(c, k)
 		a.tabStrip(c, k)
 		b := compactTitleButton(c.Key("compact-new-tab"), k, "plus", "New Tab", false).Tooltip("New Tab  ⌘T")
 		if b.Clicked() {
