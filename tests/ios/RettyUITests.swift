@@ -132,6 +132,17 @@ final class RettyUITests: XCTestCase {
         screenshot("terminal-touch-scroll")
         terminal.tap()
         XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 10))
+        // A focused terminal uses a native TextInputClient. Its input traits
+        // must still dismiss an already-visible keyboard in either direction.
+        for upward in [true, false] {
+            if upward { terminal.swipeUp() } else { terminal.swipeDown() }
+            let hidden = XCTNSPredicateExpectation(predicate: gone, object: app.keyboards.firstMatch)
+            XCTAssertEqual(XCTWaiter.wait(for: [hidden], timeout: 5), .completed,
+                           "Scrolling the focused terminal retained its keyboard")
+            XCTAssertFalse(app.buttons["Esc"].exists, "Scroll retained the keyboard accessory")
+            terminal.tap()
+            XCTAssertTrue(app.keyboards.firstMatch.waitForExistence(timeout: 5))
+        }
         for _ in 0..<8 where !app.keys["q"].exists {
             app.buttons["Next keyboard"].tap()
         }

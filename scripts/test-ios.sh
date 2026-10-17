@@ -15,12 +15,12 @@ for name in ('fixture.json','ios-finished'): (work/name).unlink(missing_ok=True)
 PYCODE
 case "${IOS_TEST_FLOW:-full}" in
  full)
-  TEST_CASE=RettyUITests/testRemoteSessionFlow
+  TEST_CASE=RettyUITests/RettyUITests/testRemoteSessionFlow
   RETTY_REMOTE_E2E=1 RETTY_IOS_FIXTURE="$WORK/fixture.json" \
    go test ./internal/remote -run '^TestTailcatSessionLifecycle$' -v -timeout 25m > "$WORK/host.log" 2>&1 &
   ;;
  background)
-  TEST_CASE=RettyUITests/testBackgroundConnectionRetention
+  TEST_CASE=RettyUITests/RettyUITests/testBackgroundConnectionRetention
   RETTY_IOS_BACKGROUND_FIXTURE="$WORK/fixture.json" \
    go test ./internal/remote -run '^TestTailcatIOSBackgroundRetention$' -v -timeout 6m > "$WORK/host.log" 2>&1 &
   ;;

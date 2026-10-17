@@ -197,3 +197,9 @@ and restores platform builds after the Android merge, including exclusive
 iOS CoreText/Metal/backend selection and the existing UIKit safe-area layout.
 The terminal plugin and Ghostty manifest are unchanged from `586185157d9c`;
 Retty retains its local terminal additions and independent CLI/iOS packaging.
+
+Fork commit `955c5f2a7739` forwards `InputOptions` for native text-input
+clients, restoring mobile terminal drag-to-dismiss behavior after Android's
+`HandleTextInput` integration. Keyboard traits update and reset with the
+focused element; both scroll directions keep working across keyboard resize.
+The terminal plugin and Ghostty manifest remain unchanged.
