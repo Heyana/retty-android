@@ -52,6 +52,7 @@ jobs:
       - name: 预编译的依赖
         run: |
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
+          mkdir -p third_party/hb-build/src/lib
           curl -fsSL https://github.com/Heyana/mygo-upstream/releases/download/hb-android-arm64/hb-android-arm64.tar.gz \
             | tar xz -C third_party/hb-build/src/lib
           curl -fsSL https://github.com/Heyana/retty-android/releases/download/ghostty-vt-android-arm64/libghostty-vt.so \
