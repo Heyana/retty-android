@@ -28,6 +28,13 @@ pluginManagement {
     }
 }
 
+// AGP 的版本必须在这里给出。app/build.gradle 里写的是 id 'com.android.application'
+// 不带版本——本机的 ~/.gradle 里有 9.0.1 的缓存，所以那台机器上一直能编；
+// 一台干净的 CI runner 没有缓存，Gradle 会报 "plugin was not found"。
+plugins {
+    id 'com.android.application' version '9.0.1' apply false
+}
+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
