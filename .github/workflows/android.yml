@@ -49,14 +49,26 @@ jobs:
       # 两个二进制都不进 git（几十 MB），都从 release 取：
       #   - HarfBuzz + FreeType 静态库：字体整形要链接它们
       #   - libghostty-vt.so：终端引擎，运行时 dlopen
+      #
+      # release 的下载地址走 CDN，刚发布的几分钟里可能 404；runner 上
+      # 也遇到过一次。所以重试，而不是让一次抖动判整次构建死刑。
       - name: 预编译的依赖
         run: |
-          mkdir -p android/app/src/main/jniLibs/arm64-v8a
-          mkdir -p third_party/hb-build/src/lib
-          curl -fsSL https://github.com/Heyana/mygo-upstream/releases/download/hb-android-arm64/hb-android-arm64.tar.gz \
-            | tar xz -C third_party/hb-build/src/lib
-          curl -fsSL https://github.com/Heyana/retty-android/releases/download/ghostty-vt-android-arm64/libghostty-vt.so \
-            -o android/app/src/main/jniLibs/arm64-v8a/libghostty-vt.so
+          fetch() {
+            local url="$1" out="$2"
+            for i in 1 2 3 4 5; do
+              if curl -fsSL --retry 2 "$url" -o "$out"; then return 0; fi
+              echo "第 $i 次失败，重试：$url"
+              sleep 5
+            done
+            echo "::error::拉不下来 $url"
+            return 1
+          }
+          mkdir -p android/app/src/main/jniLibs/arm64-v8a third_party/hb-build/src/lib
+          fetch https://github.com/Heyana/mygo-upstream/releases/download/hb-android-arm64/hb-android-arm64.tar.gz /tmp/hb.tgz
+          tar xzf /tmp/hb.tgz -C third_party/hb-build/src/lib
+          fetch https://github.com/Heyana/retty-android/releases/download/ghostty-vt-android-arm64/libghostty-vt.so \
+            android/app/src/main/jniLibs/arm64-v8a/libghostty-vt.so
           test -f third_party/hb-build/src/lib/android/lib/libharfbuzz.a
           test -s android/app/src/main/jniLibs/arm64-v8a/libghostty-vt.so
 
