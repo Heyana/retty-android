@@ -101,7 +101,19 @@ jobs:
 
       - name: 打包 APK
         working-directory: android
-        run: ./gradlew :app:assembleRelease --no-daemon
+        run: |
+          # release 用的是本机的 debug keystore（口令全世界都是 android/android，
+          # 见 app/build.gradle 的说明：这个包要能装、能测内存，不是上架用的）。
+          # 那文件是 Android SDK 第一次跑才生成的，新 runner 上没有，自己造一个。
+          if [ ! -f "$HOME/.android/debug.keystore" ]; then
+            mkdir -p "$HOME/.android"
+            keytool -genkeypair -v \
+              -keystore "$HOME/.android/debug.keystore" \
+              -storepass android -keypass android -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" > /dev/null 2>&1
+          fi
+          ./gradlew :app:assembleRelease --no-daemon
 
       # AGP 会缓存 jniLibs。这一步把 APK 里的 .so 掏出来和刚编的比，
       # 免得打出旧包——今天在真机上已经因为这个白测过几轮。
