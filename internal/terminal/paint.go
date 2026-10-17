@@ -601,7 +601,14 @@ func (v *view) draw(p *ui.Painter, r ui.Rect) {
 			}
 		})
 	}
-	if v.preedit != "" && v.focused {
+	// The composition is drawn whenever there is one. It used to also require
+	// v.focused, which build() sets from the element's focus — and an input
+	// method's SetMarkedText runs off the frame, so on the first composition
+	// after a tap v.focused was still false and the candidate bar showed while
+	// the terminal showed nothing at all. Having a preedit is the condition
+	// that matters: only a focused element is given one, so the second test
+	// only ever hid text the user was typing.
+	if v.preedit != "" {
 		v.drawPreedit(p, ox, oy, cw, ch, base)
 	}
 	v.drawScrollbar(p, r)

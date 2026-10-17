@@ -1,4 +1,4 @@
-//go:build !retty_cli
+//go:build !retty_cli && !android
 
 package library
 

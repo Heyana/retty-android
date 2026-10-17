@@ -16,6 +16,7 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
+	github.com/Heyana/typesetting-go v0.3.5-heyana.4 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/creachadair/msync v0.8.1 // indirect
@@ -63,5 +64,6 @@ require (
 
 tool github.com/egoist/mygo/cmd/mygo
 
-// MyGo source branch: github.com/daodao97/mygo@main.
-replace github.com/egoist/mygo => github.com/daodao97/mygo v0.0.0-20261016035237-9d63caa85ca9
+// MyGo source branch: github.com/daodao97/mygo@main, from the merge that
+// brought the Android backend in (pull request #2).
+replace github.com/egoist/mygo => github.com/daodao97/mygo v0.0.0-20261017101208-586185157d9c
