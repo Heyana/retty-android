@@ -557,7 +557,16 @@ func (m *mobileApp) view(c *ui.Context) {
 func (m *mobileApp) contentView(c *ui.Context) {
 	m.syncNavigation()
 	m.navigation.InteractiveBack = (!m.busy || m.reconnecting) && !m.scanning
-	ui.Column(c).Fill().Children(func() {
+	// 让开设备自己的 chrome（状态栏、挖孔、手势条）。
+	//
+	// mygo 把窗口内边距从 Java 的 WindowInsets 算好（DIP）交给 Go，但**不会
+	// 自动应用**——它是给视图读的 API，不是布局的默认行为。所以这里要把
+	// Context.SafeArea() 自己套上，否则内容从屏幕左上角开始画，压在状态栏下。
+	//
+	// 只在这一层套，不套进 terminalView：终端是满屏内容，让开手势条会平白
+	// 少两行，且终端自己处理滚动。
+	safe := c.SafeArea()
+	ui.Column(c).Fill().Padding(safe.Top, safe.Right, safe.Bottom, safe.Left).Children(func() {
 		m.navigation.View(c, func(page *ui.Route) {
 			page.Page().Background(c.Theme().Background)
 			switch page.Path() {

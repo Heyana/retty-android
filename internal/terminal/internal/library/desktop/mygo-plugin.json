@@ -31,6 +31,11 @@
           "name": "ghostty-vt.dll",
           "sha256": "de56a362f12cce8be38e883ffc8aec90a890e0574eb73aac6e833a60fda26064",
           "url": "https://github.com/egoist/mygo/releases/download/libghostty-vt-befcdfd2c3a1/libghostty-vt-windows-arm64.dll"
+        },
+        "android-arm64": {
+          "name": "libghostty-vt.so",
+          "sha256": "c03a0dcbd096ac231da90838f6c44a68d33fa2431357686e509e10913de3ceda",
+          "url": ""
         }
       },
       "name": "libghostty-vt",

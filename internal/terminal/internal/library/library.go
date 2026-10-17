@@ -101,7 +101,16 @@ func Find(manifest []byte) (string, error) {
 
 // cachePath returns where the CLI and this package keep a downloaded
 // library.
+//
+// On Android it returns "" and no error: os.UserCacheDir needs HOME or
+// XDG_CACHE_HOME, and an app process has neither — it failed the whole
+// lookup with "neither $XDG_CACHE_HOME nor $HOME are defined" even when the
+// library was sitting in nativeLibraryDir. Nothing is downloaded on a phone
+// either (the library ships in the APK), so there is no cache to name.
 func cachePath(f nativeFile) (string, error) {
+	if runtime.GOOS == "android" {
+		return "", nil
+	}
 	dir, err := os.UserCacheDir()
 	if err != nil {
 		return "", err

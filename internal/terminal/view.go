@@ -23,7 +23,19 @@ import (
 // elsewhere) to open a hyperlink (OSC 8) on click.
 func View(c *ui.Context, t *Terminal) ui.Element {
 	v := t.viewOf(c)
+	// HandleTextInput connects the system's input methods, and is what makes
+	// tapping the terminal raise the soft keyboard on Android: Focusable alone
+	// only marks it as a focus target. Its client types what a method commits
+	// — see textinput.go.
+	//
+	// It also sets the text cursor itself, so the pointer cursor a link
+	// hovers below still wins: the element is built first, then the link
+	// decides. Order matters — calling it after the hover check overwrote
+	// CursorPointer with CursorText and a Command-hover over a URL stopped
+	// showing the hand (links_test.go caught it).
 	e := ui.Box(c).Focusable().FocusRing(false).Cursor(ui.CursorText).Clip().Role(ui.RoleTextField).Label("Terminal")
+	e.HandleTextInput(v.client())
+	e.Cursor(ui.CursorText)
 	v.build(c, e)
 	x, y, over := e.PointerPosition()
 	v.hover = linkMatch{}
@@ -114,6 +126,10 @@ type view struct {
 	pending      *pendingKey
 	preedit      string
 	preeditCaret int
+	// ti is the text-input target the system's input methods edit, whose
+	// text is typed into the terminal rather than stored. See
+	// textinput.go for why having one is what raises the keyboard.
+	ti *textInput
 
 	focused    bool
 	blinkStart time.Time
@@ -472,9 +488,37 @@ func (v *view) typed(text string) {
 	v.preedit = ""
 	p := v.pending
 	v.pending = nil
+	// A software keyboard's Return arrives as a committed newline, not as a
+	// key: an input method has no KeyEvent for it. Sent as text it would reach
+	// the program as a raw line feed, which leaves a shell waiting — Enter is
+	// CR at a prompt, and a full-screen program reads LF as Control+J. The key
+	// encoder knows the difference, so a newline is sent as the key it is.
+	//
+	// Only a whole newline converts. One inside a longer commit (a pasted
+	// block, a finished composition) is text the program asked for and stays
+	// part of it, which is why this runs before the multi-rune branch below.
+	if p == nil && (text == "\n" || text == "\r") {
+		v.sendKey(vt.KeyEvent{Action: vt.KeyPress, Key: vt.KeyEnter})
+		return
+	}
+	// 🔴 Committed text with no key and no modifier is sent as text.
+	//
+	// It used to be inferred: the character was mapped back to the key that
+	// would type it (keyOfRune) and sent through the encoder as a key press.
+	// That is right when a key and its text are one act, and wrong for an
+	// input method, which commits text with no key at all — the inference
+	// threw away whatever the key could not express. One commit of "abcde"
+	// went out as a single key press carrying one character, and the other
+	// four never reached the program. That is the input loss this fixes.
+	//
+	// A modifier never reaches this function: input() sends text that carries
+	// one to modifiedText, which is where Ctrl+c becomes Control+C. So text
+	// arriving here with no pending key is text, and is sent as text.
 	if p == nil {
-		// Text without a key: of an input method, or every key typing
-		// text on Linux.
+		v.sendText(text)
+		return
+	}
+	if p == nil {
 		r, size := utf8.DecodeRuneInString(text)
 		if size != len(text) || r == utf8.RuneError {
 			v.sendText(text)
