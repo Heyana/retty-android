@@ -41,7 +41,8 @@ func newRecoveryTestApp(t *testing.T, missingDir, failCLI bool) (*App, *ui.Teste
 	os.Mkdir(bin, 0o700)
 	script := "#!/bin/sh\nprintf 'resumed=%s\\n' \"$@\"\nwhile IFS= read -r line; do :; done\n"
 	if failCLI {
-		script = "#!/bin/sh\necho 'conversation unavailable'\nexit 42\n"
+		t.Setenv("RESUME_FIXTURE_EXIT_GATE", filepath.Join(dir, "allow-cli-exit"))
+		script = "#!/bin/sh\nwhile [ ! -e \"$RESUME_FIXTURE_EXIT_GATE\" ]; do sleep 0.01; done\necho 'conversation unavailable'\nexit 42\n"
 	}
 	if err := os.WriteFile(filepath.Join(bin, "claude"), []byte(script), 0o700); err != nil {
 		t.Fatal(err)
@@ -93,6 +94,13 @@ func newRecoveryTestApp(t *testing.T, missingDir, failCLI bool) (*App, *ui.Teste
 		os.RemoveAll(dir)
 	})
 	return a, ui.NewTester(a.view, 1000, 620), project
+}
+
+func allowRecoveryFixtureExit(t *testing.T) {
+	t.Helper()
+	if err := os.WriteFile(os.Getenv("RESUME_FIXTURE_EXIT_GATE"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestAgentRecoveryRestoresLayoutAndReusesLiveProcess(t *testing.T) {
@@ -179,6 +187,8 @@ func TestAgentRecoveryCLIExitKeepsPaneAndOutput(t *testing.T) {
 	a, tt, _ := newRecoveryTestApp(t, false, true)
 	p := a.tab().panes()[0]
 	a.tab().Zoom = nil
+	tt.Frame()
+	allowRecoveryFixtureExit(t)
 	waitFor(t, tt, "failed CLI feedback", func() bool { return p.recoveryError != "" })
 	if p.closed || len(a.tab().panes()) != 2 || !slices.Contains(tt.Texts(), "恢复失败") {
 		t.Fatal("failed CLI removed pane/layout", tt.Texts())
@@ -218,6 +228,7 @@ func TestAgentRecoveryGUIQuitDuringRetryPreservesSession(t *testing.T) {
 
 func TestAgentRecoveryReopenFailureRetainsOutput(t *testing.T) {
 	a, tt, _ := newRecoveryTestApp(t, false, true)
+	allowRecoveryFixtureExit(t)
 	waitFor(t, tt, "CLI failure", func() bool { return a.tab().panes()[0].recoveryError != "" })
 	a.saveNow()
 	for _, p := range a.tab().panes() {
@@ -247,6 +258,7 @@ func TestAgentRecoveryShutdownKeepsLayoutAfterProcessExit(t *testing.T) {
 	a, tt, _ := newRecoveryTestApp(t, false, true)
 	a.shuttingDown = func() bool { return true }
 	a.tab().Zoom = nil
+	allowRecoveryFixtureExit(t)
 	panes := a.tab().panes()
 	p := panes[0]
 	waitFor(t, tt, "owned resumed process exits during shutdown", func() bool {

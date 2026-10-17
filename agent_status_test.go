@@ -317,7 +317,7 @@ func TestAgentStateMarkersInTabs(t *testing.T) {
 	a := &App{tabs: []*Tab{tab}}
 	tt := ui.NewTester(a.view, 1000, 620)
 	tt.SetPreferences(ui.Preferences{ReduceMotion: true})
-	for _, state := range []string{agents.Ready, agents.Running, agents.Waiting, agents.Completed, agents.Failed} {
+	for _, state := range []string{agents.Ready, agents.Running, agents.Waiting, agents.Completed, agents.Failed, agents.Ready} {
 		p.info = withAgentState(p, "claude", state, 1)
 		p.attention = true // old bell attention must not hide hook state
 		tt.Frame()
@@ -325,12 +325,18 @@ func TestAgentStateMarkersInTabs(t *testing.T) {
 		if state == agents.Waiting {
 			label = "Agent waiting for input"
 		}
-		if _, ok := tt.Find(label); !ok {
-			t.Fatalf("missing %s", label)
+		if _, ok := tt.Find(label); ok != (state != agents.Ready) {
+			t.Fatalf("%s marker visible = %v", label, ok)
 		}
 		if _, ok := tt.Find("Claude Code icon"); !ok {
 			t.Fatal("state marker replaced the brand icon")
 		}
+		prefs.DesktopLayout = "sidebar"
+		tt.Frame()
+		if _, ok := tt.Find(label); ok != (state != agents.Ready) {
+			t.Fatalf("sidebar %s marker visible = %v", label, ok)
+		}
+		prefs.DesktopLayout = ""
 	}
 	p.info = withAgentState(p, "claude", agents.Waiting, 1)
 	tt.Frame()

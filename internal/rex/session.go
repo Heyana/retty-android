@@ -213,9 +213,20 @@ func newSessionForServer(id string, o CreateOptions, serverToken string) (*sessi
 // without what other terminals set, and what terminal apps set.
 func sessionEnv(id string, extra []string) []string {
 	var env []string
+	// A bare key explicitly removes an inherited variable. Recovery uses this
+	// to preserve an Agent's default configuration, rather than setting it empty.
+	unset := make(map[string]bool)
+	for _, kv := range extra {
+		if !strings.Contains(kv, "=") {
+			unset[kv] = true
+		}
+	}
 	hasLang := false
 	for _, kv := range os.Environ() {
 		k, _, _ := strings.Cut(kv, "=")
+		if unset[k] {
+			continue
+		}
 		switch {
 		case k == "TERM", k == "COLORTERM", k == "TERM_PROGRAM", k == "TERM_PROGRAM_VERSION",
 			k == "TERM_SESSION_ID", k == "TMUX", k == "TMUX_PANE", k == "STY", k == "WINDOWID",
@@ -239,7 +250,12 @@ func sessionEnv(id string, extra []string) []string {
 	if !hasLang {
 		env = append(env, "LANG=en_US.UTF-8")
 	}
-	return append(env, extra...)
+	for _, kv := range extra {
+		if strings.Contains(kv, "=") {
+			env = append(env, kv)
+		}
+	}
+	return env
 }
 
 func (s *session) read() {

@@ -45,3 +45,23 @@ func TestSessionColorEnvironment(t *testing.T) {
 		})
 	}
 }
+
+func TestSessionEnvironmentExplicitUnsetPreservesDefaultAgentConfig(t *testing.T) {
+	t.Setenv("CLAUDE_CONFIG_DIR", "/daemon-profile")
+	t.Setenv("CODEX_HOME", "/codex-profile")
+	env := sessionEnv("config-test", []string{"CLAUDE_CONFIG_DIR", "CODEX_HOME=/original-profile", "CUSTOM_EMPTY="})
+	values := make(map[string]string)
+	for _, kv := range env {
+		key, value, ok := strings.Cut(kv, "=")
+		if !ok {
+			t.Fatal("unset marker leaked to child environment", kv)
+		}
+		values[key] = value
+	}
+	if _, exists := values["CLAUDE_CONFIG_DIR"]; exists || values["CODEX_HOME"] != "/original-profile" {
+		t.Fatal("Agent config did not preserve the original selection")
+	}
+	if value, exists := values["CUSTOM_EMPTY"]; !exists || value != "" {
+		t.Fatal("an explicit empty value was incorrectly removed")
+	}
+}

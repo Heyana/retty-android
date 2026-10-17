@@ -60,12 +60,8 @@ github.com/creachadair/taskgroup v0.13.2 h1:3KyqakBuFsm3KkXi/9XIb0QcA8tEzLHLgaoi
 github.com/creachadair/taskgroup v0.13.2/go.mod h1:i3V1Zx7H8RjwljUEeUWYT30Lmb9poewSb2XI1yTwD0g=
 github.com/creack/pty v1.1.24 h1:bJrF4RRfyJnbTJqzRLHzcGaZK1NeM5kTC9jGgovnR1s=
 github.com/creack/pty v1.1.24/go.mod h1:08sCNb52WyoAwi2QDyzUCTgcvVFhUzewun7wtTfvcwE=
-github.com/daodao97/mygo v0.0.0-20261016035237-9d63caa85ca9 h1:O0JRgXDQ4KpOvNjBpxeY28kDBB5ABo6NZv7cpa8sVeM=
-github.com/daodao97/mygo v0.0.0-20261016035237-9d63caa85ca9/go.mod h1:daHGetyAlBkHhIZOOIcAI7C82yLUY7HgeT2+Z6w2VPU=
-github.com/daodao97/mygo v0.0.0-20261017081357-b77d64225a35 h1:jyHujUl0yZyrtUIsLH2KDhwD0qV52WU4DA2U4bdgkFo=
-github.com/daodao97/mygo v0.0.0-20261017081357-b77d64225a35/go.mod h1:daHGetyAlBkHhIZOOIcAI7C82yLUY7HgeT2+Z6w2VPU=
-github.com/daodao97/mygo v0.0.0-20261017101208-586185157d9c h1:eWQMO1CPWSPgJJynxXs+d5KszEYYPAPTRKUe27g4ILo=
-github.com/daodao97/mygo v0.0.0-20261017101208-586185157d9c/go.mod h1:mefxAD8YBNqS+UEPyoQQfhhUnvA131FbkR4+0F5MzAM=
+github.com/daodao97/mygo v0.0.0-20261017103221-affb7ef7eb39 h1:Ma4f0zNOQkUgVde22XuSa+xXc9p9NT/l1THtDYn11jk=
+github.com/daodao97/mygo v0.0.0-20261017103221-affb7ef7eb39/go.mod h1:mefxAD8YBNqS+UEPyoQQfhhUnvA131FbkR4+0F5MzAM=
 github.com/davecgh/go-spew v1.1.0/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc h1:U9qPSI2PIWSS1VwoXQT9A3Wy9MM3WgvqSxFWenqJduM=
@@ -92,8 +88,6 @@ github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68 h1:KZaTBSy
 github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68/go.mod h1:tphK2c80bpPhMOI4v6bIc2xWywPfbqi1Z06+RcrMkDg=
 github.com/go-ole/go-ole v1.3.0 h1:Dt6ye7+vXGIKZ7Xtk4s6/xVdGDQynvom7xCFEdWr6uE=
 github.com/go-ole/go-ole v1.3.0/go.mod h1:5LS6F96DhAwUc7C+1HLexzMXY1xGRSryjyPPKW6zv78=
-github.com/go-text/typesetting v0.3.5 h1:XZPUooClHY0Vf/rFyUyuPRNEkawARaFzLMQcXLSEyPk=
-github.com/go-text/typesetting v0.3.5/go.mod h1:XZO1hD+nQVyvVa5IicQk7FsCa4PFQaJ2soWAP1f//68=
 github.com/go-text/typesetting-utils v0.0.0-20260419141703-4ffe8874dabc h1:8FGo2It5K75XkavhTiCKExUfVaVDS1feBnLCru5qeoY=
 github.com/go-text/typesetting-utils v0.0.0-20260419141703-4ffe8874dabc/go.mod h1:3/62I4La/HBRX9TcTpBj4eipLiwzf+vhI+7whTc9V7o=
 github.com/go4org/hashtriemap v0.0.0-20260824042624-45fcf11fca0e h1:ZpjpNPLAkPzo4kGjruw82H26Dsec83ZmR5iiLfcbuTE=

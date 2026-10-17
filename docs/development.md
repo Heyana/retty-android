@@ -396,6 +396,8 @@ xcrun devicectl device process launch --device "$IOS_DEVICE" --terminate-existin
 
 两种模式共用 Tab 的选择、拖动排序、重命名、关闭和右键操作，也保留已有快捷键、远端电脑标识与 Agent 状态。侧边栏列表只在切换选中 Tab 或重新展开时滚动到选中项，普通滚轮浏览不会被拉回。
 
+侧边栏的标签页列表最多占窗口高度的 40%，下方「项目会话」独立滚动，按工作目录列出本机 Codex / Claude Code 历史，项目按其中最近活跃会话的时间倒序排列。项目名称和箭头均可展开、折叠；点击已打开的会话会激活原标签页和窗格，未打开时才在新本机标签页精确 resume，并沿用原配置目录。历史扫描在后台执行，MyGo `Outline` 只渲染可见行；刷新和恢复的隔离用例见 `sidebar_history_test.go` 与 `internal/agenthistory/history_test.go`，不读取开发者真实历史。详细行为见 [Agent 会话恢复](agent-recovery.md)。
+
 终端分屏使用 MyGo `SplitPercent` / `SplitVerticalPercent`，在现有 `Node.Ratio` 与百分数之间转换，保留保存的布局格式。框架负责分隔条拖动、键盘方向键调整、无障碍范围和窄窗口约束；窗口缩小不覆盖已选比例，恢复空间后继续使用原比例。Retty 只补充双击均分和共享分隔线的焦点边框。图标操作使用 `ButtonBase`，统一支持 Tab 聚焦、Enter / Space 激活和禁用状态。
 
 ## 桌面文件浏览器

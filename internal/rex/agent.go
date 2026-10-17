@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path/filepath"
 	"time"
 
 	"retty/internal/agents"
@@ -272,6 +273,13 @@ func agentConfigDir(agent string) *string {
 		return nil
 	}
 	value := os.Getenv(key)
+	if value != "" {
+		absolute, err := filepath.Abs(value)
+		if err != nil {
+			return nil
+		}
+		value = absolute
+	}
 	return &value
 }
 

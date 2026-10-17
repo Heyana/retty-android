@@ -163,6 +163,27 @@ func (r agentResume) command() ([]string, error) {
 	return cmd, nil
 }
 
+// Old hooks used an empty value to mean the user's default configuration.
+// Passing that empty value to Claude instead selects the wrong history root.
+// A bare key means unset; even an explicit ~/.claude can change global settings.
+func (r agentResume) configEnv() ([]string, error) {
+	env := slices.Clone(r.Env)
+	for i, kv := range env {
+		if !recoveryEnv(kv) {
+			return nil, errors.New("unsupported Agent environment")
+		}
+		key, value, _ := strings.Cut(kv, "=")
+		if value == "" {
+			env[i] = key
+			continue
+		} else if !filepath.IsAbs(value) {
+			value = filepath.Join(r.Dir, value)
+		}
+		env[i] = key + "=" + value
+	}
+	return env, nil
+}
+
 type recoveryFile struct {
 	Version  int                    `json:"version"`
 	Sessions map[string]agentResume `json:"sessions"`
@@ -189,6 +210,17 @@ func (s *Server) loadRecovery(dir string) error {
 	}
 	if file.Sessions != nil {
 		s.recovery = file.Sessions
+	}
+	for sid, r := range s.recovery {
+		// Retry a missing executable once after a daemon restart. A failed CLI
+		// still retains its output and requires an explicit retry.
+		if strings.HasPrefix(r.Error, "exec: ") && strings.HasSuffix(r.Error, ": executable file not found in $PATH") {
+			r.Error = ""
+		}
+		if env, err := r.configEnv(); err == nil {
+			r.Env = env
+		}
+		s.recovery[sid] = r
 	}
 	return nil
 }
@@ -270,6 +302,11 @@ func (s *Server) recordAgent(ss *session, agent string, h agents.HookInput) erro
 			r.Dir = previous.Dir
 		}
 	}
+	if env, err := r.configEnv(); err == nil {
+		r.Env = env
+	} else {
+		return err
+	}
 	if s.recovery == nil {
 		s.recovery = map[string]agentResume{}
 	}
@@ -316,11 +353,15 @@ func (s *Server) restoreAgent(req Request) (RestoreResult, error) {
 	}
 	cmd, err := r.command()
 	var env []string
+	var configEnv []string
 	if err == nil {
-		cmd[0], env, err = resumeExecutable(cmd[0])
+		configEnv, err = r.configEnv()
 	}
 	if err == nil {
-		ss, err = newSessionForServer(req.SID, CreateOptions{Command: cmd, Dir: r.Dir, Env: append(env, r.Env...), Cols: req.Cols, Rows: req.Rows, resumed: true}, s.agentToken)
+		cmd[0], env, err = ResumeExecutable(cmd[0])
+	}
+	if err == nil {
+		ss, err = newSessionForServer(req.SID, CreateOptions{Command: cmd, Dir: r.Dir, Env: append(env, configEnv...), Cols: req.Cols, Rows: req.Rows, resumed: true}, s.agentToken)
 	}
 	if err != nil {
 		r.Error = err.Error()
@@ -332,6 +373,7 @@ func (s *Server) restoreAgent(req Request) (RestoreResult, error) {
 		return result, nil
 	}
 	r.Error, r.pid, r.seen = "", ss.p.cmd.Process.Pid, time.Now()
+	r.Env = configEnv
 	ss.mu.Lock()
 	// Recovery keeps the original pane/conversation IDs. Continue its event
 	// sequence so persisted push and read receipts cannot hide the next turn.

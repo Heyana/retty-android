@@ -484,10 +484,11 @@ func TestDesktopRestoreSplitsAndAdaptActiveRemoteGrid(t *testing.T) {
 	a.desktops.hosts = []*desktopHost{h}
 	a.createDesktopSession(h, "/tmp", nil, false)
 	waitFor(t, tt, "remote shell", func() bool { return len(a.tabs) == 2 })
+	p := a.tab().Focus
+	waitFor(t, tt, "remote input attachment", func() bool { return p.remoteView.inputReady() })
 	tt.Frame()
 	tt.Type("printf 'grid-%s\\n' ready")
 	tt.Key(0, ui.KeyEnter)
-	p := a.tab().Focus
 	waitFor(t, tt, "remote stream attached", func() bool { return strings.Contains(p.term.Text(), "grid-ready") })
 	before, err := client.List()
 	if err != nil {

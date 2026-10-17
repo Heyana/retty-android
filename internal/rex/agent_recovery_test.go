@@ -543,3 +543,61 @@ func TestAgentRecoveryFindsCLIOnInteractivePath(t *testing.T) {
 		t.Fatal("resumed without the interactive PATH", ss.p.cmd.Path, path)
 	}
 }
+
+func TestAgentRecoveryMigratesDefaultConfigAndRetriesLookupAfterReboot(t *testing.T) {
+	s := recoveryServer(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	fakeResumeCLI(t, "claude", false)
+	// The daemon's own setting must not replace the original default home.
+	t.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(home, "wrong-daemon-profile"))
+	s.recovery["pane"] = agentResume{Agent: "claude", SessionID: "exact-conversation", Dir: Dir(), Env: []string{"CLAUDE_CONFIG_DIR="}, Error: `exec: "claude": executable file not found in $PATH`}
+	s.recovery["failed-cli"] = agentResume{Agent: "claude", SessionID: "other-conversation", Dir: Dir(), Error: "claude 恢复进程已退出（1）"}
+	if err := s.saveRecovery(); err != nil {
+		t.Fatal(err)
+	}
+	rebooted := &Server{sessions: map[string]*session{}, quit: make(chan struct{})}
+	if err := rebooted.loadRecovery(Dir()); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		for _, ss := range rebooted.sessions {
+			ss.kill()
+		}
+	})
+	if rebooted.recovery["pane"].Error != "" || rebooted.recovery["failed-cli"].Error == "" {
+		t.Fatal("launch and CLI failures were not distinguished")
+	}
+	r, err := rebooted.restoreAgent(Request{SID: "pane"})
+	if err != nil || r.Session == nil || r.Error != "" {
+		t.Fatal(r, err)
+	}
+	ss := rebooted.sessions["pane"]
+	config, found := "", false
+	for _, kv := range ss.p.cmd.Env {
+		if value, ok := strings.CutPrefix(kv, "CLAUDE_CONFIG_DIR="); ok {
+			config, found = value, true
+		}
+	}
+	if found || !slices.Contains(ss.p.cmd.Args, "exact-conversation") {
+		t.Fatal("default profile or exact conversation changed", config, ss.p.cmd.Args)
+	}
+}
+
+func TestAgentConfigDirCapturesDefaultSentinelAndAbsoluteCustomHomes(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	for _, agent := range []string{"claude", "codex"} {
+		for _, value := range []string{"", "relative-config", filepath.Join(home, "custom")} {
+			t.Setenv(agents.ConfigEnv(agent), value)
+			got := agentConfigDir(agent)
+			want := ""
+			if value != "" {
+				want, _ = filepath.Abs(value)
+			}
+			if got == nil || *got != want {
+				t.Fatal("hook lost effective configuration", agent, value, got)
+			}
+		}
+	}
+}

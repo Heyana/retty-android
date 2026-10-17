@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -21,7 +22,16 @@ import (
 // renders offscreen. Ordinary unit tests continue without starting AppKit.
 func TestMain(tests *testing.M) {
 	if os.Getenv("RETTY_MOBILE_RECOVERY_E2E") != "1" {
-		os.Exit(tests.Run())
+		// Sidebar history must never read the developer's real conversations.
+		dir, err := os.MkdirTemp("", "retty-test-agent-homes-")
+		if err != nil {
+			panic(err)
+		}
+		os.Setenv("CODEX_HOME", filepath.Join(dir, "codex"))
+		os.Setenv("CLAUDE_CONFIG_DIR", filepath.Join(dir, "claude"))
+		code := tests.Run()
+		os.RemoveAll(dir)
+		os.Exit(code)
 	}
 	code := 1
 	mygo.App.WhenReady(func() { go func() { code = tests.Run(); mygo.App.Quit() }() })

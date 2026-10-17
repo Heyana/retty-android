@@ -74,7 +74,7 @@ func tabAgentState(t *Tab) (*Pane, rex.AgentState) {
 }
 
 func (a *App) agentIndicator(c *ui.Context, k *colors, p *Pane, s rex.AgentState) {
-	if p == nil || s.State == "" {
+	if p == nil || s.State == "" || s.State == agents.Ready {
 		return
 	}
 	label := "Agent " + s.State

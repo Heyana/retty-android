@@ -4,8 +4,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/Heyana/typesetting-go/segmenter"
 	"github.com/egoist/mygo/ui"
-	"github.com/go-text/typesetting/segmenter"
 	"retty/internal/terminal/internal/vt"
 )
 

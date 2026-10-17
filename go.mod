@@ -3,10 +3,10 @@ module retty
 go 1.27.1
 
 require (
+	github.com/Heyana/typesetting-go v0.3.5-heyana.4
 	github.com/coder/websocket v1.8.14
 	github.com/ebitengine/purego v0.11.1
 	github.com/egoist/mygo v0.2.15
-	github.com/go-text/typesetting v0.3.5
 	github.com/skip2/go-qrcode v0.0.0-20200617195104-da1b6568686e
 	github.com/tailscale/tailcat v0.7.0
 	golang.org/x/image v0.46.0
@@ -16,7 +16,6 @@ require (
 
 require (
 	filippo.io/edwards25519 v1.2.0 // indirect
-	github.com/Heyana/typesetting-go v0.3.5-heyana.4 // indirect
 	github.com/akutz/memconn v0.1.0 // indirect
 	github.com/anmitsu/go-shlex v0.0.0-20200514113438-38f4b401e2be // indirect
 	github.com/creachadair/msync v0.8.1 // indirect
@@ -64,6 +63,5 @@ require (
 
 tool github.com/egoist/mygo/cmd/mygo
 
-// MyGo source branch: github.com/daodao97/mygo@main, from the merge that
-// brought the Android backend in (pull request #2).
-replace github.com/egoist/mygo => github.com/daodao97/mygo v0.0.0-20261017101208-586185157d9c
+// MyGo source branch: github.com/daodao97/mygo@main.
+replace github.com/egoist/mygo => github.com/daodao97/mygo v0.0.0-20261017103221-affb7ef7eb39

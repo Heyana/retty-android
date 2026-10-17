@@ -9,7 +9,7 @@ import (
 )
 
 func (a *App) sidebarLayout(c *ui.Context, k *colors, bar ui.TitleBar) {
-	width, _ := c.Size()
+	width, height := c.Size()
 	sideWidth := float32(224)
 	if width < 720 {
 		sideWidth = 188
@@ -31,11 +31,12 @@ func (a *App) sidebarLayout(c *ui.Context, k *colors, bar ui.TitleBar) {
 					a.collapseSidebarButton(c, k)
 				})
 				ui.Scroll(c.Key("sidebar-tabs")).Label("Sidebar tabs").Role(ui.RoleTabList).
-					Grow(1).MinHeight(0).FillWidth().Padding(10, 8).Gap(4).Children(func() {
+					Height(min(float32(len(a.tabs)*44+16), max(96, height*0.4))).Shrink(0).MinHeight(0).FillWidth().Padding(10, 8).Gap(4).Children(func() {
 					for i, t := range slices.Clone(a.tabs) {
 						a.sidebarTab(c, k, i, t)
 					}
 				})
+				a.sidebarProjectSessions(c, k)
 			})
 			a.sidebarVisibleTab = a.tab()
 		}

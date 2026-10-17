@@ -96,6 +96,7 @@ type Pane struct {
 
 // App is the state of Retty's window.
 type App struct {
+	agentHistory     *sidebarAgentHistory
 	remoteUpdate     *remoteUpdateDialog
 	desktopUpdater   *desktopUpdateService
 	terminalHistory  *terminalHistory
@@ -236,10 +237,16 @@ func (a *App) newPane(dir string, cols, rows int) *Pane {
 }
 
 func (a *App) newCommandPane(dir string, command []string, cols, rows int) *Pane {
+	return a.newOptionsPane(rex.CreateOptions{Dir: dir, Command: command, Cols: cols, Rows: rows})
+}
+
+func (a *App) newOptionsPane(options rex.CreateOptions) *Pane {
+	dir, cols, rows := options.Dir, options.Cols, options.Rows
 	if cols <= 0 {
 		cols, rows = 80, 24
 	}
-	info, err := a.client.Create(rex.CreateOptions{Dir: dir, Command: command, Cols: cols, Rows: rows})
+	options.Cols, options.Rows = cols, rows
+	info, err := a.client.Create(options)
 	if err != nil {
 		log.Printf("creating a session: %v", err)
 		a.err = err.Error()
@@ -392,7 +399,11 @@ func (a *App) newLocalTab(dir string) *Tab {
 }
 
 func (a *App) newLocalCommandTab(dir string, command []string) *Tab {
-	p := a.newCommandPane(dir, command, 0, 0)
+	return a.newLocalOptionsTab(rex.CreateOptions{Dir: dir, Command: command})
+}
+
+func (a *App) newLocalOptionsTab(options rex.CreateOptions) *Tab {
+	p := a.newOptionsPane(options)
 	t := a.singlePaneTab(p)
 	at := min(a.active+1, len(a.tabs))
 	a.tabs = slices.Insert(a.tabs, at, t)

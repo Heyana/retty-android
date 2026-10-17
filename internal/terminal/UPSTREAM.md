@@ -166,3 +166,34 @@ Fork commit `9d63caa85ca9` adds the opt-in alternate-screen drag override above,
 with a real Vim mouse-mode regression and protocol checks for clicks, wheel,
 Option drags and switching back to application-owned selection. Retty carries
 the same terminal option and enables it for Vim/Neovim, including vi/view aliases.
+
+Fork commit `14d502e3a56a` enables higher iPhone display-link refresh rates
+for ProMotion by setting the required generated Info.plist opt-in and requesting
+a 60–120 Hz frame-rate range. The terminal plugin, Ghostty manifest and UI APIs
+are unchanged from `9d63caa85ca9`; Retty retains its local terminal additions
+and independent CLI/iOS packaging.
+
+Fork commit `0a53a811f153` merges upstream list selection/drag selection,
+comparable element keys, weighted text-range layout, effect-layer lifetime,
+macOS tray positioning and sender-avatar notifications. The terminal plugin
+and Ghostty manifest are unchanged from `14d502e3a56a`; Retty retains its
+local terminal additions and independent CLI/iOS packaging.
+
+Fork commit `b77d64225a35` recognizes hard-wrapped file paths in indented
+table cells, preserving complete paths and line/column locations across rows.
+Hit testing and hover underlines cover only the path cells on the pointed row,
+excluding the table's left column and padding. Retty carries the same fix
+while retaining its reflowed display and independent CLI/iOS packaging.
+
+Fork commit `586185157d9c` merges Android support, software-modifier routing
+for native text input, safe-area reporting and fixed-height list/grid layout.
+Retty aligns its terminal grapheme segmenter with MyGo's typesetting fork;
+the upstream newline mirror fix already matches the local implementation.
+The terminal's Ghostty manifest is unchanged, so Retty retains its reflowed
+display and independent CLI/iOS packaging.
+
+Fork commit `affb7ef7eb39` incorporates upstream window/tray activation fixes
+and restores platform builds after the Android merge, including exclusive
+iOS CoreText/Metal/backend selection and the existing UIKit safe-area layout.
+The terminal plugin and Ghostty manifest are unchanged from `586185157d9c`;
+Retty retains its local terminal additions and independent CLI/iOS packaging.
